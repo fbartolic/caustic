@@ -15,11 +15,13 @@ def plot_data(ax, x, y, y_err):
         ecolor='#686868')
     ax.grid(True)
 
-def plot_emcee_traceplots(sampler, acceptance_fraction=0, labels):
+def plot_emcee_traceplots(sampler, labels, acceptance_fraction=0):
     """Plots MCMC traceplot given an emcee sampler object.
     
     Parameters
     ----------
+    ax : object
+        Matplotlib axes object.
     sampler : object
         emcee sampler object
     acceptance_fraction : float
@@ -27,7 +29,6 @@ def plot_emcee_traceplots(sampler, acceptance_fraction=0, labels):
         treshold, defaults to zero.
     labels : array
         Array of latex strings for parameter labels.
-    
     """
 
     n_pars = len(sampler.flatchain[0, :])
@@ -50,4 +51,6 @@ def plot_emcee_traceplots(sampler, acceptance_fraction=0, labels):
         a.grid(True)
 
     ax[-1].set_xlabel('steps')
+
+    return fig, ax
 

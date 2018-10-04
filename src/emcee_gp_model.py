@@ -1,9 +1,27 @@
 import numpy as np
+from matplotlib import pyplot as plt
 import emcee
+import sys
+sys.path.append('codebase')
+from plotting_utils import plot_data, plot_emcee_traceplots
+from data_preprocessing_ogle import process_data
 import celerite
 from celerite.modeling import Model # an abstract class implementing the 
 # skeleton of the celerite modeling protocol
 from celerite import terms
+from scipy.special import gamma
+from scipy.stats import invgamma
+from scipy.optimize import fsolve
+
+def solve_for_invgamma_params(params, t_min, t_max):
+    def inverse_gamma_cdf(x, alpha, beta):
+        return invgamma.cdf(x, alpha, scale=beta)
+
+    alpha, beta = params
+
+    return (inverse_gamma_cdf(2*t_min, alpha, beta) - \
+    0.01, inverse_gamma_cdf(t_max, alpha, beta) - 0.99)
+
 
 class CustomCeleriteModel(Model):
     """Celerite requires the specification of a custom class implementing
@@ -29,35 +47,48 @@ class PointSourcePointLensGP_emcee(object):
         # Set up mean model
         t0_guess_idx = (np.abs(F - np.max(F))).argmin()
 
-        mean_model = CustomCeleriteModel(0., 0., t[t0_guess_idx], 0.1, 10.)
+        mean_model = CustomCeleriteModel(0., 0., self.t[t0_guess_idx], 0.1, 10.)
 
         # Set up the GP model
-        term1 = terms.SHOTerm(log_S0=0., log_Q=0., log_omega0=0.)
-        term2 = terms.SHOTerm(log_S0=np.log(1), log_Q=np.log(1/np.sqrt(2)), log_omega0=0.)
-        term2.freeze_parameter('log_S0')
-        term2.freeze_parameter('log_Q')
-        kernel = term1 * term2
+        term1 = terms.Matern32Term(log_sigma=np.log(2.), log_rho=np.log(10))
+        kernel = term1
 
         gp = celerite.GP(kernel, mean=mean_model, fit_mean=True)
-        gp.compute(t, sigF)
+        gp.compute(self.t, self.sigF)
 
         self.gp = gp
 
         print("Initial log-likelihood: {0}".format(gp.log_likelihood(F)))
         print("Parameter names", gp.parameter_names)
 
-    def log_prior(self, pars):
-        lnL = 0
-        ln_S0, ln_Q, ln_omega1, ln_omega2, DeltaF, Fb, t0, teff, tE = pars
+        # Compute parameters for the prior on GP hyperparameters
+        a, b =  fsolve(solve_for_invgamma_params, (0.1, 0.1), 
+            (np.median(np.diff(self.t)), t[-1] - t[0]))
+        #print("Median delta_t: ", np.diff(self.t))
+        #print("Max t", t[-1] - t[0])
+        self.rho_invgamma_params = [a, b]
 
-        # Priors for the GP hyperparameters
-        if ln_S0 < -15. or ln_S0 > 5.:
-            return -np.inf
-        if ln_Q < -10. or ln_Q > 15:
-            return -np.inf
-        if ln_omega1 < -10. or ln_omega2 > 10:
-            return -np.inf
-        if ln_omega2 < -5. or ln_omega2 > 5:
+    def log_prior(self, pars):
+
+        lnL = 0 
+
+        ln_sigma, ln_rho, DeltaF, Fb, t0, teff, tE, u_K = pars
+
+        # Prior for the GP hyperparameter
+        lnpdf_lninvgamma = lambda  x, a, b: np.log(x) + a*np.log(b) -\
+            (a + 1)*np.log(x) - b/x - np.log(gamma(a)) 
+
+        # Variance parameter sigma
+        sigma = np.exp(ln_sigma)
+        lnL += np.log(sigma) - sigma**2/3.**2
+
+        # Characteristic timescale rho 
+        a = self.rho_invgamma_params[0]
+        b = self.rho_invgamma_params[1]
+        lnL += lnpdf_lninvgamma(np.exp(ln_rho), a, b)
+
+        # Prior for u_K, the factor which rescales the errorbars
+        if u_K < -1 or u_K > 1:
             return -np.inf
 
         # DeltaF prior
@@ -69,7 +100,7 @@ class PointSourcePointLensGP_emcee(object):
         lnL += -Fb**2/0.1**2
         
         # t0 prior 
-        if t0 < 0. or t0 > 1.:
+        if t0 < np.min(self.t) or t0 > np.max(self.t):
             return -np.inf
         
         # (lnteff, lntE) joint prior
@@ -81,7 +112,15 @@ class PointSourcePointLensGP_emcee(object):
         return lnL
 
     def log_posterior(self, pars):    
-        self.gp.set_parameter_vector(pars)
+        ln_sigma, ln_rho, DeltaF, Fb, t0, teff, tE, u_K = pars
+
+        if u_K < 0:
+            K = 1.
+        else:
+            K = 1 - np.log(1 - u_K)
+
+        self.gp.compute(self.t, K*self.sigF)
+        self.gp.set_parameter_vector((ln_sigma,ln_rho,DeltaF,Fb,t0,teff,tE))
         
         lp = self.log_prior(pars)
         
@@ -90,24 +129,26 @@ class PointSourcePointLensGP_emcee(object):
         return self.gp.log_likelihood(self.F) + lp 
 
     def sample(self, nsteps, nwalkers):
-        initial_gp = self.gp.get_parameter_vector()
-        ndim, nwalkers = len(initial_gp), nwalkers
-        p0_gp = initial_gp + 1e-8 * np.random.randn(nwalkers, ndim)
+        initial_pars_gp = self.gp.get_parameter_vector()
+        initial_pars = np.append(initial_pars_gp, (0,))
+
+        ndim, nwalkers = len(initial_pars), nwalkers
+        p0 = initial_pars + 1e-8 * np.random.randn(nwalkers, ndim)
         sampler = emcee.EnsembleSampler(nwalkers, ndim, self.log_posterior)
 
         print("Running burn-in...")
-        p0, _, _ = sampler.run_mcmc(p0_gp, 1000)
+        p0, _, _ = sampler.run_mcmc(p0, 1000)
         sampler.reset()
 
         print("Running production...")
-        sampler.run_mcmc(p0_gp, nsteps);
+        sampler.run_mcmc(p0, nsteps);
         
-        return sampler
+        return sampler, self.gp
 
 import os 
 events = [] # event names
 lightcurves = [] # data for each event
- 
+
 i = 0
 n_events = 100
 for entry in os.scandir('../../../data/OGLE_ews/2017/'):
@@ -116,20 +157,3 @@ for entry in os.scandir('../../../data/OGLE_ews/2017/'):
         photometry = np.genfromtxt(entry.path + '/phot.dat', usecols=(0,1,2))
         lightcurves.append(photometry)
         i = i + 1
- 
-gp_model = PointSourcePointLensGP_emcee(lightcurves[0][:, 0], 
-    lightcurves[0][:, 1], lightcurves[0][:, 2])
-
-sampler = gp_model.sample(5000, 50)
-print(sampler.acceptance_fraction)
-
-
-labels = ['$\ln S_0$', '$\ln Q$', '$\ln\omega_1$', '$\ln\omega_2$',\
-    '$\Delta F$', '$F_b$', '$t_0$', '$t_{eff}$', '$t_E$']
-
-import sys
-sys.path.append('codebase')
-from plotting_utils import plot_data, plot_emcee_traceplots
-fig, ax = plot_emcee_traceplots(sampler,
-        labels=labels, acceptance_fraction=0.)
-plt.show()
