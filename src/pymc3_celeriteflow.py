@@ -154,7 +154,7 @@ class _TensorFlowGradOp(tt.Op):
             outputs[i][0] = np.array(r)
 
 
-def log_likelihood(t, F, sigF, DeltaF, Fb, t0, teff, tE, u_K):
+def log_likelihood(t, F, sigF, DeltaF, Fb, t0, teff, tE, u_K, ln_sigma, ln_rho):
     """Custom log-likelihood implemented in tensorflow.
     
     Parameters
@@ -176,8 +176,6 @@ def log_likelihood(t, F, sigF, DeltaF, Fb, t0, teff, tE, u_K):
         The log-likelihood at given parameters. 
     """
 
-   # DeltaF, Fb, t0, teff, tE = params
-
     # Evaluate forward model
     u0 = teff/tE
     u = tf.sqrt(u0**2 + ((t - t0)/tE)**2)
@@ -189,8 +187,24 @@ def log_likelihood(t, F, sigF, DeltaF, Fb, t0, teff, tE, u_K):
     K = tf.cond(tf.less(u_K, 0.), lambda: tf.cast(1., dtype=tf.float64),  
         lambda: 1. - tf.log(1 - u_K))
 
+    # Set up the gp
+    kernel = cf.terms.Matern32Term(log_sigma=ln_sigma,
+                            log_rho=ln_rho)
+
+    #gp = cf.GaussianProcess(kernel, t, F, K*sigF)
+
     # Evaluate log-likelihood
-    return -0.5 * tf.reduce_sum(tf.square((F - mean)/(K*sigF)))
+    solver = cf.Solver(kernel, t, K*sigF)
+    alpha = solver.apply_inverse(F[:, None])
+    log_likelihood = -0.5 * (
+        tf.squeeze(
+            tf.matmul(F[None, :] - mean, alpha))
+        + solver.log_determinant
+        + tf.cast(tf.size(t), tf.float64)*tf.constant(np.log(2*np.pi), 
+            dtype=tf.float64))
+
+    return log_likelihood
+
 
 events = [] # event names
 lightcurves = [] # data for each event
@@ -217,18 +231,17 @@ def fit_pymc3_model(t, F, sigF):
     teff_tens = tf.Variable(10.0, dtype=tf.float64, name="teff")
     tE_tens = tf.Variable(20.0, dtype=tf.float64, name="tE")
     u_K_tens = tf.Variable(0.40, dtype=tf.float64, name="u_K")
-    #ln_sigma_tens = tf.Variable(0.0, dtype=tf.float64, name="ln_sigma")
-    #ln_rho_tens = tf.Variable(0.0, dtype=tf.float64, name="ln_rho")
+    ln_sigma_tens = tf.Variable(0.0, dtype=tf.float64, name="ln_sigma")
+    ln_rho_tens = tf.Variable(0.0, dtype=tf.float64, name="ln_rho")
     
     session.run(tf.global_variables_initializer())
 
     log_likelihood_tensor = log_likelihood(t, F, sigF, DeltaF_tens, Fb_tens,
-        t0_tens, teff_tens, tE_tens, u_K_tens)
+        t0_tens, teff_tens, tE_tens, u_K_tens, ln_sigma_tens, ln_rho_tens)
 
     tf_loglike = TensorFlowOp(log_likelihood_tensor, [DeltaF_tens, Fb_tens, t0_tens, 
-        teff_tens, tE_tens, u_K_tens],
-                          names=["DeltaF", "Fb", "t0", "teff", "tE", "u_K"])
-    #                       "ln_sigma", "log_rho"])
+        teff_tens, tE_tens, u_K_tens, ln_sigma_tens, ln_rho_tens],
+        names=["DeltaF", "Fb", "t0", "teff", "tE", "u_K", "ln_sigma", "ln_rho"])
 
     # Test the gradient
     pt = session.run(tf_loglike.parameters)
@@ -257,14 +270,14 @@ def fit_pymc3_model(t, F, sigF):
             res = lnpdf_lninvgamma(np.exp(ln_rho), invgamma_a, invgamma_b)
             return tt.cast(res, 'float64')
 
-        #ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval = 0.)
+        ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval = 0.)
 
         def ln_sigma_prior(ln_sigma):
             sigma = np.exp(ln_sigma)
             res = np.log(sigma) - sigma**2/3.**2
             return tt.cast(res, 'float64')
 
-        #ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval = 2.)
+        ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval = 2.)
 
         # Priors for unknown model parameters
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
@@ -282,7 +295,8 @@ def fit_pymc3_model(t, F, sigF):
         tE = teff_tE[1]
 
         # Define a custom "potential" to calculate the log likelihood
-        pm.Potential("loglike", tf_loglike(DeltaF, Fb, t0, teff, tE, u_K))
+        pm.Potential("loglike", tf_loglike(DeltaF, Fb, t0, teff, tE, u_K,
+            ln_sigma, ln_rho))
        
         # Initial parameters for the sampler
         t0_guess_idx = (np.abs(F - np.max(F))).argmin()
