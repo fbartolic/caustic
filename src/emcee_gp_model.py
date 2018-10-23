@@ -20,7 +20,7 @@ def solve_for_invgamma_params(params, t_min, t_max):
     alpha, beta = params
 
     return (inverse_gamma_cdf(2*t_min, alpha, beta) - \
-    0.01, inverse_gamma_cdf(t_max, alpha, beta) - 0.99)
+    0.001, inverse_gamma_cdf(t_max, alpha, beta) - 0.99)
 
 
 class CustomCeleriteModel(Model):
@@ -35,6 +35,7 @@ class CustomCeleriteModel(Model):
         A = lambda u: (u**2 + 2)/(u*np.sqrt(u**2 + 4))  
         
         return self.DeltaF*(A(u) - 1)/(A(u0) - 1) + self.Fb
+    
 
 class PointSourcePointLensGP_emcee(object):
     """Class defining a PSPL emcee model using  a Celerite GP for the noise
@@ -144,16 +145,3 @@ class PointSourcePointLensGP_emcee(object):
         sampler.run_mcmc(p0, nsteps);
         
         return sampler, self.gp
-
-import os 
-events = [] # event names
-lightcurves = [] # data for each event
-
-i = 0
-n_events = 100
-for entry in os.scandir('../../../data/OGLE_ews/2017/'):
-    if entry.is_dir() and (i < n_events):
-        events.append(entry.name)
-        photometry = np.genfromtxt(entry.path + '/phot.dat', usecols=(0,1,2))
-        lightcurves.append(photometry)
-        i = i + 1

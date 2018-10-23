@@ -86,7 +86,7 @@ def fit_pymc3_model(t, F, sigF):
     
     # Fit model with NUTS
     with model:
-        trace = pm.sample(5000, tune=2000, nuts_kwargs=dict(target_accept=.95),
+        trace = pm.sample(2000, tune=2000, nuts_kwargs=dict(target_accept=.95),
             start=start)
     
     return trace 
@@ -96,6 +96,14 @@ for event_index, lightcurve in enumerate(lightcurves):
     # Pre process data
     t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
          lightcurve[:, 2], standardize=True)
+
+    # Save processed data
+    if not os.path.exists('output/' + events[event_index]):
+        os.makedirs('output/' + events[event_index])
+    
+    data = np.stack((t, F, sigF), axis=1)
+    np.save('output/' + events[event_index] + '/data.npy', 
+        data)
 
     # Fit pymc3 model
     trace = fit_pymc3_model(t, F, sigF)
@@ -112,19 +120,12 @@ for event_index, lightcurve in enumerate(lightcurves):
     model_emcee_GP = PointSourcePointLensGP_emcee(t, F, sigF)
     sampler_emcee_GP, gp = model_emcee_GP.sample(5000., 50)
 
-
     # Save posterior samples
-    if not os.path.exists('output/' + events[event_index]):
-        os.makedirs('output/' + events[event_index])
-    
     samples_pymc3 = np.vstack([trace['DeltaF'],trace['Fb'],trace['t0'],
                          trace['teff_tE'][:, 0],trace['teff_tE'][:, 1],
                          trace['u_K']]).T
-    samples_emcee = sampler_emcee.chain[sampler_emcee.acceptance_fraction > 0.05,
-         :].reshape((-1, sampler_emcee.ndim))
-    samples_emcee_GP = \
-        sampler_emcee_GP.chain[sampler_emcee_GP.acceptance_fraction > 0.05,
-        :].reshape((-1, sampler_emcee_GP.ndim))
+    samples_emcee = sampler_emcee.chain
+    samples_emcee_GP = sampler_emcee_GP.chain
 
     np.save('output/' + events[event_index] + '/samples_pymc3.npy', 
         samples_pymc3)
@@ -132,94 +133,18 @@ for event_index, lightcurve in enumerate(lightcurves):
         samples_emcee)
     np.save('output/' + events[event_index] + '/samples_emcee_GP.npy',
         samples_emcee_GP)
+    np.save('output/' + events[event_index] + '/samples_emcee_acc_frac.npy',
+        sampler_emcee.acceptance_fraction)
+    np.save('output/' + events[event_index] + '/samples_emcee_GP_acc_frac.npy',
+        sampler_emcee_GP.acceptance_fraction)
 
-
-    # Plot traceplots
+    # Save pymc3 traceplots
     fig, ax = plt.subplots(5, 2 ,figsize=(10,10))
-    plt.title('Percentage of divergent samples %.1f' % divperc1)
     _ = pm.traceplot(trace, ax=ax)
     plt.savefig('output/' + events[event_index] + '/traceplots.png')
 
-    plt.clf()
-    labels = ['$\Delta F$', '$F_b$', '$t_0$', '$t_{eff}$', '$t_E$', '$u_K$']
-    labels_GP = ['$\ln\sigma$', '$\ln \ln\textrm{rho}$','$\Delta F$', '$F_b$', '$t_0$', 
-        '$t_{eff}$', '$t_E$', '$u_K$']
-
-    fig1, ax1 = plot_emcee_traceplots(sampler_emcee,
-        labels=labels, acceptance_fraction=0.05)
-    plt.savefig('output/' + events[event_index] + '/emcee_traceplots.png')    
-
-    fig2, ax2 = plot_emcee_traceplots(sampler_emcee_GP,
-        labels=labels_GP, acceptance_fraction=0.05)
-    plt.savefig('output/' + events[event_index] + '/emcee_GP_traceplots.png')    
-
-    # Plot model
-    quantiles_pymc3 = np.percentile(samples_pymc3, [16, 50, 84], axis=0)
-    quantiles_emcee = np.percentile(samples_emcee, [16, 50, 84], axis=0)
-    quantiles_emcee_GP = np.percentile(samples_emcee_GP, [16, 50, 84], axis=0)
-
-    t_ = np.linspace(t[0], t[-1], 1000)
-
-    plt.clf()
-    fig, ax = plt.subplots(figsize=(20, 8))
-    plot_data(ax, t, F, sigF)
-    ax.plot(t_, model_emcee.forward_model(quantiles_pymc3[1], t_), 
-                 marker='', linestyle='-', color='C0', lw=2., label='NUTS')
-    ax.plot(t_, model_emcee.forward_model(quantiles_emcee[1], t_), 
-                 marker='', linestyle='-', color='C1', lw=2., label='emcee')
-    ax.legend(prop={'size': 12})
-    plt.savefig('output/' + events[event_index] + '/model.png')    
-
-    # Save residuals and fitted values for non-GP model
-    fitted_values = model_emcee.forward_model(quantiles_pymc3[1], t)
-    residual_values = F - fitted_values
-    np.save('output/' + events[event_index] + '/fitted_values.npy', 
-        fitted_values)
-    np.save('output/' + events[event_index] + '/residual_values.npy', 
-        residual_values)
-    np.save('output/' + events[event_index] + '/sigF.npy', sigF)
-
-    # Plot GP model
-    # Make plots
-    plt.clf()
-    fig, ax = plt.subplots(figsize=(15, 6))
-    plot_data(ax, t, F, sigF) # Plot data
-
-    # gp.set_parameter_vector(s[:-1])
-    # mu, cov = gp_model.gp.predict(F, t_, return_var=True)
-
-    for s in samples_emcee_GP[np.random.randint(len(samples_emcee_GP), 
-            size=50)]:
-        gp.set_parameter_vector(s[:-1])
-        gp.compute(t, s[-1]*sigF)
-        mu = gp.predict(F, t_, return_cov=False)
-        ax.plot(t_, mu, color='C1', alpha=0.3)
-        
-    ax.grid(True)
-    plt.savefig('output/' + events[event_index] + '/model_GP.png')    
-
-    # Plot corner plot
-    plt.clf()
-    fig = corner.corner(samples_pymc3, labels=labels)
-    fig.constrained_layout = True
-    plt.savefig('output/' + events[event_index] + '/corner_pymc3.png')
-
-    plt.clf()
-    fig = corner.corner(samples_emcee, labels=labels)
-    fig.constrained_layout = True
-    plt.savefig('output/' + events[event_index] + '/corner_emcee.png')
-
-    plt.clf()
-    fig = corner.corner(samples_emcee_GP, labels=labels_GP)
-    fig.constrained_layout = True
-    plt.savefig('output/' + events[event_index] + '/corner_emcee_GP.png')
-
-    # Plot posterior for important parameters
-    plt.clf()
-    fig, ax = plt.subplots( figsize=(8,8))
-    ax.hist(samples_pymc3[:, -1], bins=50, normed=True, color='C0', alpha=0.7)
-    ax.hist(samples_emcee[:, -1], bins=50, normed=True, color='C1', alpha=0.7)
-    ax.hist(samples_emcee_GP[:, -2], bins=50, normed=True, color='C2', alpha=0.7)
-    ax.set_xlabel(r'$t_E$')
-    
-    plt.savefig('output/' + events[event_index] + '/tE_posterior.png')
+    # Save a log file
+    with open('output/' + events[event_index] + "/log.txt", "w") as text_file:
+        print(f"Percentage of divergent points: {divperc1} \n", file=text_file)
+        print(f"Median spacing between data points: \
+            {np.median(np.diff(t))} \n", file=text_file)

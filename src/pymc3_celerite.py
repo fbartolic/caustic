@@ -3,15 +3,12 @@ from matplotlib import pyplot as plt
 import matplotlib as mpl
 import scipy
 import corner
-import emcee
 import pymc3 as pm
 import theano
 import theano.tensor as T
 from theano.ifelse import ifelse
 import seaborn as sns
 import os
-import sys
-#sys.path.append('codebase')
 from codebase.data_preprocessing_ogle import process_data
 from codebase.plotting_utils import plot_data, plot_emcee_traceplots
 import celerite
@@ -21,7 +18,6 @@ from celerite import terms
 from scipy.special import gamma
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
-
 
 def solve_for_invgamma_params(params, t_min, t_max):
     def inverse_gamma_cdf(x, alpha, beta):
@@ -38,6 +34,7 @@ class CustomCeleriteModel(Model):
     parameter_names = ("DeltaF", "Fb", "t0", "teff", "tE")
 
     def get_value(self, t):
+        """"Compute PSPL microlensing model."""
         u0 = self.teff/self.tE
         u = np.sqrt(u0**2 + ((t - self.t0)/self.tE)**2)
             
@@ -45,10 +42,13 @@ class CustomCeleriteModel(Model):
         
         return self.DeltaF*(A(u) - 1)/(A(u0) - 1) + self.Fb
 
-    # This method is optional but it can be used to compute the gradient of the
-    # cost function below.
-       
+    # Computes the gradient of the PSPL model w.r. to model parameters
     def compute_gradient(self, t):
+        pars = np.array([self.DeltaF, self.Fb, self.t0, self.teff, 
+            self.tE])
+        if(np.any(np.isnan(pars))):
+            raise ValueError("Parameters are NaNs")
+
         u0 = self.teff/self.tE
         u = np.sqrt(u0**2 + ((t - self.t0)/self.tE)**2)
         A_u = (u**2 + 2)/(u*np.sqrt(u**2 + 4))  
@@ -75,9 +75,13 @@ class CustomCeleriteModel(Model):
         /(A_u0 - 1) - (A_u - 1)/(A_u0 - 1)**2*dAdu0*(self.teff/self.tE**2))
 
         gradients = np.array([dF_dDeltaF, dF_dFb, dF_dt0, dF_dteff, dF_dtE])
-        #print("PARAMETERS: ", [self.DeltaF, self.Fb, self.t0, self.teff, 
-            #self.tE], "\n")
-        #print("GRADIENTS: ", gradients)
+
+        # Raise an error if any of the gradients is a NaN
+        if(np.any(np.isnan(gradients))):
+            print("PARAMETERS: ", [self.DeltaF, self.Fb, self.t0, self.teff, 
+            self.tE], "\n")
+            print("GRADIENTS: ", gradients)
+
         return gradients
 
 class PointSourcePointLensGP_emcee(object):
@@ -104,10 +108,8 @@ class PointSourcePointLensGP_emcee(object):
 
     def log_likelihood(self, pars):    
         ln_sigma, ln_rho, DeltaF, Fb, t0, teff, tE = pars
-
-        #if u_K < 0:
-        #    K = 1.
-        #else:
+        #if u_K < 0: #    K = 1.
+                #else:
         #    K = 1 - np.log(1 - u_K)
 
         #print("ln_sigma \n", ln_sigma)
@@ -207,11 +209,9 @@ class LogLikeGrad(T.Op):
 
         # calculate gradients
         gradients = self.gp.grad_log_likelihood(y=F)[1]
-
-        # Raise an error if any of the gradients is a NaN
         if(np.any(np.isnan(gradients))):
-            raise ValueError("The gradients are NaNs")
-
+            raise ValueError("Gradients are NaNs")
+        
         # Check if any of the gradients are zero and raise an exception
         if np.any(np.allclose(gradients, 0)):
             print("Shape of gradients:", np.shape(gradients), "\n")
@@ -253,7 +253,6 @@ def fit_pymc3_model(t, F, sigF, custom_likelihood):
             return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2
 
         # Priors for GP hyperparameters
-        
         def ln_rho_prior(ln_rho):
             lnpdf_lninvgamma = lambda  x, a, b: np.log(x) + a*np.log(b) -\
                  (a + 1)*np.log(x) - b/x - np.log(gamma(a)) 
