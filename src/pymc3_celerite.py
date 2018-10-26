@@ -4,17 +4,22 @@ import matplotlib as mpl
 import scipy
 import corner
 import pymc3 as pm
-import theano
-import theano.tensor as T
-from theano.ifelse import ifelse
 import seaborn as sns
 import os
 from codebase.data_preprocessing_ogle import process_data
-from codebase.plotting_utils import plot_data, plot_emcee_traceplots
-import celerite
-from celerite.modeling import Model # an abstract class implementing the 
-# skeleton of the celerite modeling protocol
-from celerite import terms
+from codebase.plotting_utils import plot_data
+
+import theano
+import theano.tensor as T
+from theano.ifelse import ifelse
+
+import sys
+sys.path.append("theano_ops")
+from theano_ops.celerite.factor import FactorOp
+from theano_ops.celerite.solve import SolveOp
+from theano_ops.celerite import terms
+from theano_ops.celerite.celerite import log_likelihood
+
 from scipy.special import gamma
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
@@ -28,101 +33,23 @@ def solve_for_invgamma_params(params, t_min, t_max):
     return (inverse_gamma_cdf(2*t_min, alpha, beta) - \
     0.001, inverse_gamma_cdf(t_max, alpha, beta) - 0.99)
 
-class CustomCeleriteModel(Model):
-    """Celerite requires the specification of a custom class implementing
-    a model. This is subclass of the abstract Model class from Celerite."""
-    parameter_names = ("DeltaF", "Fb", "t0", "teff", "tE")
+def calculate_likelihood(t, F, sigF, params):
+    ln_sigma, ln_rho, DeltaF, Fb, t0, teff, tE = params
 
-    def get_value(self, t):
-        """"Compute PSPL microlensing model."""
-        u0 = self.teff/self.tE
-        u = np.sqrt(u0**2 + ((t - self.t0)/self.tE)**2)
-            
-        A = lambda u: (u**2 + 2)/(u*np.sqrt(u**2 + 4))  
+    # Set up mean model
+    u0 = teff/tE
+    u = theano.sqrt(u0**2 + ((t - t0)/tE)**2)
         
-        return self.DeltaF*(A(u) - 1)/(A(u0) - 1) + self.Fb
+    A = lambda u: (u**2 + 2)/(u*theano.sqrt(u**2 + 4))  
+    
+    mean_model = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
 
-    # Computes the gradient of the PSPL model w.r. to model parameters
-    def compute_gradient(self, t):
-        pars = np.array([self.DeltaF, self.Fb, self.t0, self.teff, 
-            self.tE])
-        if(np.any(np.isnan(pars))):
-            raise ValueError("Parameters are NaNs")
+    kernel = terms.Matern32Term(sigma=ln_sigma, rho=ln_rho)
 
-        u0 = self.teff/self.tE
-        u = np.sqrt(u0**2 + ((t - self.t0)/self.tE)**2)
-        A_u = (u**2 + 2)/(u*np.sqrt(u**2 + 4))  
-        A_u0 = (u0**2 + 2)/(u0*np.sqrt(u0**2 + 4))  
-        dAdu = -8./(u**2*(u**2 + 4)**(3/2.))
-        dAdu0 = -8./(u0**2*(u0**2 + 4)**(3/2.))
+    loglike, z, d, W, a, U, V, P = log_likelihood(kernel, 
+        T.constant(1.4)*sigF, t, F)
 
-        # dF/dDeltaF
-        dF_dDeltaF = (A_u - 1)/(A_u0 - 1) 
-
-        # dF/dFb
-        dF_dFb = np.ones_like(t)
-
-        # dF/dt0
-        dF_dt0 = self.DeltaF/(A_u0 - 1)*dAdu*\
-            (-(t - self.t0)/(u*self.tE**2))
-
-        # dF/dteff
-        dF_dteff =self.DeltaF*((dAdu/(u*self.tE))/(A_u0 - 1) - (A_u - 1)/\
-            (A_u0 - 1)**2*dAdu0/self.tE)
-
-        # dF/dtE
-        dF_dtE = self.DeltaF*((-dAdu*((t - self.t0)**2/(u*self.tE**3)))\
-        /(A_u0 - 1) - (A_u - 1)/(A_u0 - 1)**2*dAdu0*(self.teff/self.tE**2))
-
-        gradients = np.array([dF_dDeltaF, dF_dFb, dF_dt0, dF_dteff, dF_dtE])
-
-        # Raise an error if any of the gradients is a NaN
-        if(np.any(np.isnan(gradients))):
-            print("PARAMETERS: ", [self.DeltaF, self.Fb, self.t0, self.teff, 
-            self.tE], "\n")
-            print("GRADIENTS: ", gradients)
-
-        return gradients
-
-class PointSourcePointLensGP_emcee(object):
-    """Class defining a PSPL emcee model using  a Celerite GP for the noise
-        model."""
-    def __init__(self, t, F, sigF, *args, **kwargs):
-        self.t = t
-        self.F =  F
-        self.sigF = sigF
-
-        # Set up mean model
-        t0_guess_idx = (np.abs(F - np.max(F))).argmin()
-
-        mean_model = CustomCeleriteModel(0., 0., self.t[t0_guess_idx], 0.1, 10.)
-
-        # Set up the GP model
-        term1 = terms.Matern32Term(log_sigma=np.log(2.), log_rho=np.log(10))
-        kernel = term1
-
-        gp = celerite.GP(kernel, mean=mean_model, fit_mean=True)
-        gp.compute(self.t, 1.4*self.sigF)
-
-        self.gp = gp
-
-    def log_likelihood(self, pars):    
-        ln_sigma, ln_rho, DeltaF, Fb, t0, teff, tE = pars
-        #if u_K < 0: #    K = 1.
-                #else:
-        #    K = 1 - np.log(1 - u_K)
-
-        #print("ln_sigma \n", ln_sigma)
-        #print("ln_rho \n", ln_rho)
-        #print("t0\n",  t0)
-        #print("teff\n", teff)
-        #print("tE\n", tE)
-        #print("u_K\n ", u_K)
-
-        self.gp.compute(self.t, 1.4*self.sigF)
-        self.gp.set_parameter_vector((ln_sigma,ln_rho,DeltaF,Fb,t0,teff,tE))
-
-        return self.gp.log_likelihood(self.F) 
+    return loglike
 
 # Define a theano Op for a custom likelihood function
 class LogLike(T.Op):
@@ -135,7 +62,7 @@ class LogLike(T.Op):
     itypes = [T.dvector] # expects a vector of parameter values when called
     otypes = [T.dscalar] # outputs a single scalar value (the log likelihood)
 
-    def __init__(self, loglike, gp, F):
+    def __init__(self, loglike, t, F, sigF):
         """
         Initialise the Op with various things that our log-likelihood function
         requires. Below are the things that are needed in this particular
@@ -154,17 +81,17 @@ class LogLike(T.Op):
         """
 
         # add inputs as class attributes
-        self.likelihood = loglike
+        self.likelihood = calculate_likelihood
 
         # initialise the gradient Op (below)
-        self.logpgrad = LogLikeGrad(self.likelihood, gp, F)
+        self.logpgrad = LogLikeGrad(self.likelihood)
 
-    def perform(self, node, inputs, outputs):
+    def perform(self, node, inputs, outputs, t, F, sigF):
         # the method that is used when calling the Op
         theta, = inputs  # this will contain my variables
  
         # call the log-likelihood function
-        logl = self.likelihood(theta)
+        logl = self.likelihood(t, F, sigF, theta)
 
         outputs[0][0] = np.array(logl) # output the log-likelihood
 
@@ -202,22 +129,15 @@ class LogLikeGrad(T.Op):
 
         # add inputs as class attributes
         self.likelihood = loglike
-        self.gp = gp
 
     def perform(self, node, inputs, outputs):
         theta, = inputs
 
-        # calculate gradients
-        gradients = self.gp.grad_log_likelihood(y=F)[1]
-        if(np.any(np.isnan(gradients))):
-            raise ValueError("Gradients are NaNs")
-        
-        # Check if any of the gradients are zero and raise an exception
-        if np.any(np.allclose(gradients, 0)):
-            print("Shape of gradients:", np.shape(gradients), "\n")
-            print("Values of parameters:", np.shape(gradients), "\n")
-            print("Parameter names:", self.gp.get_parameter_names, "\n")
-            print("Parameter values:", self.gp.get_parameter_vector, "\n")
+        # Get the gradients
+        g = theano.function(inputs=[ln_s, ln_rho, DeltaF, Fb, t0, teff, tE], 
+            outputs=theano.grad(self.loglike, 
+            [ln_s, ln_rho,  DeltaF, Fb, t0, teff, tE]), 
+                on_unused_input="ignore")
 
         outputs[0][0] = gradients
 
@@ -236,9 +156,10 @@ for entry in os.scandir('/home/star/fb90/data/OGLE_ews/2017/'):
         
 print("Loaded events:", events)
 
-def fit_pymc3_model(t, F, sigF, custom_likelihood):
+def fit_pymc3_model(t, F, sigF):
     model = pm.Model()
 
+    # SPECIFICATION OF PRIORS
     # Compute parameters for the prior on GP hyperparameters
     invgamma_a, invgamma_b =  fsolve(solve_for_invgamma_params, (0.1, 0.1), 
         (np.median(np.diff(t)), t[-1] - t[0]))
@@ -260,14 +181,14 @@ def fit_pymc3_model(t, F, sigF, custom_likelihood):
             res = lnpdf_lninvgamma(np.exp(ln_rho), invgamma_a, invgamma_b)
             return T.cast(res, 'float64')
 
-        ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval = 0.)
+        ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval = 0.6)
 
         def ln_sigma_prior(ln_sigma):
             sigma = np.exp(ln_sigma)
             res = np.log(sigma) - sigma**2/3.**2
             return T.cast(res, 'float64')
 
-        ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval = 2.)
+        ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval=2.)
 
         # Priors for unknown model parameters
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
@@ -276,9 +197,10 @@ def fit_pymc3_model(t, F, sigF, custom_likelihood):
         t0 = pm.Uniform('t0', 0, 1.)
         teff_tE = pm.DensityDist('teff_tE', joint_density, shape=2, 
             testval = [0.1, 10.])
-        # u_K = pm.Uniform('u_K', -1., 1.)
 
-        # K = ifelse(u_K < 0., T.cast(1., 'float64'), 1. - T.log(1. - u_K))
+        u_K = pm.Uniform('u_K', -1., 1.)
+
+        K = ifelse(u_K < 0., T.cast(1., 'float64'), 1. - T.log(1. - u_K))
 
         # Transform t0 to sensible units
         t0 = (t[-1] - t[0])*t0 + t[0]
@@ -287,14 +209,26 @@ def fit_pymc3_model(t, F, sigF, custom_likelihood):
         tE = teff_tE[1]
         u0 = teff/tE
 
-        # Convert all parameters to a tensor vector
-        theta = T.as_tensor_variable([ln_sigma, ln_rho, DeltaF, Fb, t0, teff,
-            tE])
+        # CALCULATE LIKELIHOOD
+        def custom_log_likelihood(t, F, sigF):
+            # Set up mean model
+            u0 = teff/tE
+            
+            u = T.sqrt(u0**2 + ((t - t0)/tE)**2)
 
-        ## Calculate the likelihood by calling a Theano Op 
-        # use a DensityDist (use a lamdba function to "call" the Op)
-        pm.DensityDist('likelihood', lambda v: custom_likelihood(v), 
-            observed={'v': theta})
+            A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+            mean_function = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
+
+            kernel = terms.Matern32Term(sigma=ln_sigma, rho=ln_rho)
+
+            loglike = log_likelihood(kernel, mean_function,
+                K*sigF, t, F)
+
+            return loglike 
+
+        logl = pm.DensityDist('logl', custom_log_likelihood, 
+            observed={'t': t, 'F':F, 'sigF': sigF})
 
         # Initial parameters for the sampler
         t0_guess_idx = (np.abs(F - np.max(F))).argmin()
@@ -303,11 +237,14 @@ def fit_pymc3_model(t, F, sigF, custom_likelihood):
         start = {'DeltaF':np.max(F), 'Fb':0.,
             't0':(t[t0_guess_idx] - t[0])/(t[-1] - t[0])}
 
+        for RV in model.basic_RVs:
+            print(RV.name, RV.logp(model.test_point))
+
         # Fit model with NUTS
         trace = pm.sample(2000, tune=2000, nuts_kwargs=dict(target_accept=.95),
-        start=start)
+            start=start)
 
-    return trace 
+    return trace
 
 for event_index, lightcurve in enumerate(lightcurves):
 
@@ -315,11 +252,7 @@ for event_index, lightcurve in enumerate(lightcurves):
     t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
         lightcurve[:, 2], standardize=True)
 
-    # Initialize Celerite model
-    model_GP = PointSourcePointLensGP_emcee(t, F, sigF)
-
-    # Create custom theano Op
-    log_likelihood = LogLike(model_GP.log_likelihood, model_GP.gp, F)
 
     # Fit pymc3 model
-    trace = fit_pymc3_model(t, F, sigF, log_likelihood)
+    trace = fit_pymc3_model(t, F, sigF)
+    print(trace)
