@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
 
-__all__ = ["kepler", "celerite"]
+__all__ = ["celerite"]
 
-from . import kepler, celerite
+from . import celerite

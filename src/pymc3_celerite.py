@@ -33,115 +33,6 @@ def solve_for_invgamma_params(params, t_min, t_max):
     return (inverse_gamma_cdf(2*t_min, alpha, beta) - \
     0.001, inverse_gamma_cdf(t_max, alpha, beta) - 0.99)
 
-def calculate_likelihood(t, F, sigF, params):
-    ln_sigma, ln_rho, DeltaF, Fb, t0, teff, tE = params
-
-    # Set up mean model
-    u0 = teff/tE
-    u = theano.sqrt(u0**2 + ((t - t0)/tE)**2)
-        
-    A = lambda u: (u**2 + 2)/(u*theano.sqrt(u**2 + 4))  
-    
-    mean_model = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
-
-    kernel = terms.Matern32Term(sigma=ln_sigma, rho=ln_rho)
-
-    loglike, z, d, W, a, U, V, P = log_likelihood(kernel, 
-        T.constant(1.4)*sigF, t, F)
-
-    return loglike
-
-# Define a theano Op for a custom likelihood function
-class LogLike(T.Op):
-    """
-    Specify what type of object will be passed and returned to the Op when it is
-    called. In our case we will be passing it a vector of values (the parameters
-    that define our model) and returning a single "scalar" value (the
-    log-likelihood)
-    """
-    itypes = [T.dvector] # expects a vector of parameter values when called
-    otypes = [T.dscalar] # outputs a single scalar value (the log likelihood)
-
-    def __init__(self, loglike, t, F, sigF):
-        """
-        Initialise the Op with various things that our log-likelihood function
-        requires. Below are the things that are needed in this particular
-        example.
-
-        Parameters
-        ----------
-        loglike:
-            The log-likelihood (or whatever) function we've defined
-        data:
-            The "observed" data that our log-likelihood function takes in
-        t:
-            The dependent variable (aka 't') that our model requires
-        sigma:
-            The noise standard deviation that our function requires.
-        """
-
-        # add inputs as class attributes
-        self.likelihood = calculate_likelihood
-
-        # initialise the gradient Op (below)
-        self.logpgrad = LogLikeGrad(self.likelihood)
-
-    def perform(self, node, inputs, outputs, t, F, sigF):
-        # the method that is used when calling the Op
-        theta, = inputs  # this will contain my variables
- 
-        # call the log-likelihood function
-        logl = self.likelihood(t, F, sigF, theta)
-
-        outputs[0][0] = np.array(logl) # output the log-likelihood
-
-    def grad(self, inputs, g):
-        # the method that calculates the gradients - it actually returns the
-        # vector-Jacobian product - g[0] is a vector of parameter values 
-        theta, = inputs  # our parameters 
-        return [g[0]*self.logpgrad(theta)]
-
-class LogLikeGrad(T.Op):
-
-    """
-    This Op will be called with a vector of values and also return a vector of
-    values - the gradients in each dimension.
-    """
-    itypes = [T.dvector]
-    otypes = [T.dvector]
-
-    def __init__(self, loglike, gp, F):
-        """
-        Initialise with various things that the function requires. Below
-        are the things that are needed in this particular example.
-
-        Parameters
-        ----------
-        loglike:
-            The log-likelihood (or whatever) function we've defined
-        data:
-            The "observed" data that our log-likelihood function takes in
-        x:
-            The dependent variable (aka 'x') that our model requires
-        sigma:
-            The noise standard deviation that out function requires.
-        """
-
-        # add inputs as class attributes
-        self.likelihood = loglike
-
-    def perform(self, node, inputs, outputs):
-        theta, = inputs
-
-        # Get the gradients
-        g = theano.function(inputs=[ln_s, ln_rho, DeltaF, Fb, t0, teff, tE], 
-            outputs=theano.grad(self.loglike, 
-            [ln_s, ln_rho,  DeltaF, Fb, t0, teff, tE]), 
-                on_unused_input="ignore")
-
-        outputs[0][0] = gradients
-
-
 events = [] # event names
 lightcurves = [] # data for each event
  
@@ -255,4 +146,7 @@ for event_index, lightcurve in enumerate(lightcurves):
 
     # Fit pymc3 model
     trace = fit_pymc3_model(t, F, sigF)
-    print(trace)
+
+    fig, ax = plt.subplots(5, 2 ,figsize=(10,10))
+    _ = pm.traceplot(trace, ax=ax)
+    plt.savefig('output/' + events[event_index] + '/traceplots_celerite.png')
