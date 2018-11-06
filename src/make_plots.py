@@ -63,6 +63,8 @@ for entry in os.scandir('output'):
             '/samples_emcee_acc_frac.npy')
         samples_emcee_GP_acc_frac = np.load(entry.path + \
             '/samples_emcee_GP_acc_frac.npy')
+        samples_pymc3_celerite = np.load(entry.path +\
+             '/samples_pymc3_celerite.npy')
         
         # Plot traceplots
         labels = ['$\Delta F$', '$F_b$', '$t_0$', '$t_{eff}$', '$t_E$', '$u_K$']
@@ -85,6 +87,8 @@ for entry in os.scandir('output'):
         quantiles_emcee_GP = \
             np.percentile(samples_emcee_GP.reshape(-1, len(labels_GP)), 
             [16, 50, 84], axis=0)
+        quantiles_pymc3_celerite = np.percentile(samples_pymc3_celerite, 
+            [16, 50, 84], axis=0)
 
         t_ = np.linspace(t[0], t[-1], 1000)
 
@@ -106,7 +110,7 @@ for entry in os.scandir('output'):
             residuals_emcee, 'emcee')
         plt.savefig(entry.path +  '/model_emcee.png')    
 
-        ## Calculate median GP model
+        ## Calculate median GP emcee model
         samples_GP = samples_emcee_GP.reshape(-1, len(labels_GP))
         model_emcee_GP = PointSourcePointLensGP_emcee(t, F, sigF)
         quantiles_emcee_GP = np.percentile(samples_GP,
@@ -129,13 +133,16 @@ for entry in os.scandir('output'):
         fig, ax = plot_data_and_median_model(t, F, sigF, mu,
             residuals_GP, 'GP model')
         plt.savefig(entry.path +  '/model_GP_median.png')    
-        
+
+
         # Plot a Quantile-Quantile plot (QQ plot)
         plt.clf()
         fig, ax = plt.subplots(figsize=(6,6))
         qq_plot(ax, residuals_pymc3)
         plt.savefig(entry.path + '/QQ_plot.png')    
         
+
+        # PPC - samples from posterior in data space
         plt.clf()
         fig, ax = plt.subplots(figsize=(15, 6))
         plot_data(ax, t, F, sigF) # Plot data
