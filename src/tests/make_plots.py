@@ -134,12 +134,15 @@ lightcurves = [] # data for each event
  
 i = 0
 n_events = 5
-for entry in os.scandir('/home/star/fb90/data/OGLE_ews/2017/'):
-    if entry.is_dir() and (i < n_events):
-        events.append(entry.name)
-        photometry = np.genfromtxt(entry.path + '/phot.dat', usecols=(0,1,2))
+data_path = '/home/fran/data/OGLE_ews/2017'
+for entry in sorted(os.listdir(data_path)):
+    if (i < n_events):
+        events.append(entry)
+        print(entry)
+        photometry = np.genfromtxt(data_path + '/' + entry + '/phot.dat', usecols=(0,1,2))
         lightcurves.append(photometry)
         i = i + 1
+
         
 print("Loaded events:", events)
 
@@ -152,53 +155,71 @@ for event_index, lightcurve in enumerate(lightcurves):
     F = F[:limits[event_index]]
     sigF = sigF[:limits[event_index]]
 
-
+    # Load samples
     samples_pymc3 = np.load(events[event_index] + '_samples_pymc3.npy')
+    #samples_emcee = np.load(events[event_index] + '_samples_emcee.npy').reshape(-1,
+    #    2).T
 
     quantiles_pymc3_GP = np.percentile(samples_pymc3,
             [16, 50, 84], axis=1)
+    #quantiles_emcee_GP = np.percentile(samples_emcee,
+    #        [16, 50, 84], axis=1)
 
-    model_emcee_GP = GP_emcee(t, F, 1.4*sigF)
+    model_emcee_GP = GP_emcee(t, F, 1.*sigF)
     gp = model_emcee_GP.gp
 
     median_GP_params_pymc3 = quantiles_pymc3_GP[1, :]
-    print(median_GP_params_pymc3)
-
-    gp.set_parameter_vector(median_GP_params_pymc3)
+    #median_GP_params_emcee = quantiles_emcee_GP[1, :]
 
     t_ = np.linspace(t[0], t[-1], 5000)
 
-    gp.compute(t, 1.4*sigF)
+    # pymc3 residuals
+    gp.set_parameter_vector(median_GP_params_pymc3)
+    gp.compute(t, 1.*sigF)
     mu_pymc3 = gp.predict(F, t_, return_cov=False)
     residuals_GP_pymc3 = F - gp.predict(F, t, return_cov=False)
 
-    plt.clf()
-    fig, ax = plot_data_and_median_model(t, F, sigF, mu_pymc3,
-        residuals_GP_pymc3, 'GP model')
-    plt.savefig(events[event_index] + '_model_GP__pymc3_median.png')    
+    # emcee residuals
+    #gp.set_parameter_vector(median_GP_params_emcee)
+    #gp.compute(t, 1.*sigF)
+    #mu_emcee = gp.predict(F, t_, return_cov=False)
+    #residuals_GP_emcee = F - gp.predict(F, t, return_cov=False)
 
-    # Plot posterior samples
+    def plot_posterior_samples(ax, samples):
+        samples = samples.T
+
+        for s in samples[np.random.randint(len(samples), 
+                size=100)]:
+            gp.set_parameter_vector(s)
+            gp.compute(t, 1.*sigF)
+            mu = gp.predict(F, t_, return_cov=False)
+            ax.plot(t_, mu, color='C1', alpha=0.3)
+        ax.grid(True)
+
+    # Plot posterior samples pymc3
     plt.clf()
     fig, ax = plt.subplots(figsize=(25, 6))
     plot_data(ax, t, F, sigF) # Plot data
     ax.set_xlim(t[0], t[-1])
+    plot_posterior_samples(ax, samples_pymc3)
+    plt.savefig('output/' + events[event_index] + '_model_pymc3_GP.png')    
 
-    print(np.shape(samples_pymc3))
-
-    samples_pymc3 = samples_pymc3.T
-
-    for s in samples_pymc3[np.random.randint(len(samples_pymc3), 
-            size=100)]:
-        gp.set_parameter_vector(s)
-        gp.compute(t, 1.4*sigF)
-        mu = gp.predict(F, t_, return_cov=False)
-        ax.plot(t_, mu, color='C1', alpha=0.3)
-        
-    ax.grid(True)
-    plt.savefig(events[event_index] + '_model_GP.png')    
-
-    # Plot corner plots
+#    plt.clf()
+#    fig, ax = plt.subplots(figsize=(25, 6))
+#    plot_data(ax, t, F, sigF) # Plot data
+#    ax.set_xlim(t[0], t[-1])
+#    plot_posterior_samples(ax, samples_emcee)
+#    plt.savefig('output/' + events[event_index] + '_model_emcee_GP.png')    
+#
+    # Plot corner plot pymc3
     plt.clf()
     fig = corner.corner(samples_pymc3.reshape(-1, 2))
     fig.constrained_layout = True
-    plt.savefig(events[event_index] + '_corner_pymc3.png')
+    plt.savefig('output/' + events[event_index] + '_corner_pymc3.png')
+
+    # Plot corner plot emcee
+    #plt.clf()
+    #fig = corner.corner(samples_emcee.reshape(-1, 2))
+    #fig.constrained_layout = True
+    #plt.savefig('output/' + events[event_index] + '_corner_emcee.png')
+

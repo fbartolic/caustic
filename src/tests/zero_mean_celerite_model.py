@@ -36,6 +36,47 @@ from scipy.optimize import fsolve
 
 mpl.rc('text', usetex=False)
 
+# DFM's pymc3 hack for estimating off-diagonal mass-matrix terms in NUTS during
+# burn-in period
+from pymc3.step_methods.hmc.quadpotential import QuadPotentialFull
+def get_step_for_trace(trace=None, model=None,
+                       regular_window=5, regular_variance=1e-3,
+                       **kwargs):
+    model = pm.modelcontext(model)
+    
+    # If not given, use the trivial metric
+    if trace is None:
+        potential = QuadPotentialFull(np.eye(model.ndim))
+        return pm.NUTS(potential=potential, **kwargs)
+        
+    # Loop over samples and convert to the relevant parameter space;
+    # I'm sure that there's an easier way to do this, but I don't know
+    # how to make something work in general...
+    samples = np.empty((len(trace) * trace.nchains, model.ndim))
+    i = 0
+    for chain in trace._straces.values():
+        for p in chain:
+            samples[i] = model.bijection.map(p)
+            i += 1
+    
+    # Compute the sample covariance
+    cov = np.cov(samples, rowvar=0)
+    
+    # Stan uses a regularized estimator for the covariance matrix to
+    # be less sensitive to numerical issues for large parameter spaces.
+    # In the test case for this blog post, this isn't necessary and it
+    # actually makes the performance worse so I'll disable it, but I
+    # wanted to include the implementation here for completeness
+    N = len(samples)
+    cov = cov * N / (N + regular_window)
+    cov[np.diag_indices_from(cov)] += \
+        regular_variance * regular_window / (N + regular_window)
+    
+    # Use the sample covariance as the inverse metric
+    potential = QuadPotentialFull(cov)
+    return pm.NUTS(potential=potential, **kwargs)
+
+
 def solve_for_invgamma_params(params, x_min, x_max):
     """Returns parameters of an inverse gamma distribution p(x) such that 
     0.1% of total prob. mass is assigned to values of x < x_min and 
@@ -110,7 +151,7 @@ class GP_emcee(object):
         #else:
         #    K = 1 - np.log(1 - u_K)
 
-        self.gp.compute(self.t, 1.4*self.sigF)
+        self.gp.compute(self.t, 1.*self.sigF)
         self.gp.set_parameter_vector((ln_sigma,ln_rho))
         
         lp = self.log_prior(pars)
@@ -139,6 +180,7 @@ class GP_emcee(object):
 
 def fit_pymc3_model(t, F, sigF):
     model = pm.Model()
+    strt = time.time()
 
     # SPECIFICATION OF PRIORS
     # Compute parameters for the prior on GP hyperparameters
@@ -173,7 +215,7 @@ def fit_pymc3_model(t, F, sigF):
         # Parameters
         ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval=2.)
         ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval=0.6)
-        lnK = pm.Normal('lnK', mu=0., sd=1., testval=0.)
+        #lnK = pm.Normal('lnK', mu=0., sd=1.5, testval=0.)
         #u_K = pm.Uniform('u_K', -1., 1.)
         #K = ifelse(u_K < 0., T.cast(1., 'float64'), 1. - T.log(1. - u_K))
 
@@ -183,7 +225,7 @@ def fit_pymc3_model(t, F, sigF):
                 rho=T.exp(ln_rho))
 
             loglike = log_likelihood(kernel, 0.,
-                (T.exp(lnK) + 1.)*sigF, t, F)
+                sigF, t, F)
 
             return loglike 
 
@@ -194,9 +236,23 @@ def fit_pymc3_model(t, F, sigF):
             print(RV.name, RV.logp(model.test_point))
 
         # Fit model with NUTS
-        trace = pm.sample(2000, tune=2000, nuts_kwargs=dict(target_accept=.95))
+        #trace = pm.sample(2000, tune=4000, nuts_kwargs=dict(target_accept=.95))
 
-    return trace
+        # DFM's optimized sampling procedure
+        #burnin_trace = None
+        #for steps in n_window:
+        #    step = get_step_for_trace(burnin_trace, regular_window=0)
+        #    burnin_trace = pm.sample(
+        #        start=None, tune=steps, draws=2, step=step,
+        #        compute_convergence_checks=False, discard_tuned_samples=False)
+        #    start = [t[-1] for t in burnin_trace._straces.values()]
+
+        #step = get_step_for_trace(burnin_trace, regular_window=0)
+        #dense_trace = pm.sample(draws=5000, tune=n_burn, step=step, start=start)
+        #factor = 5000 / (5000 + np.sum(n_window+2) + n_burn)
+        #dense_time = factor * (time.time() - strt)
+
+    return model
 
 limits = [1700, 1900, 1900, 1700, 2500]
 
@@ -205,14 +261,26 @@ lightcurves = [] # data for each event
  
 i = 0
 n_events = 5
-for entry in os.scandir('/home/star/fb90/data/OGLE_ews/2017/'):
-    if entry.is_dir() and (i < n_events):
-        events.append(entry.name)
-        photometry = np.genfromtxt(entry.path + '/phot.dat', usecols=(0,1,2))
+data_path = '/home/fran/data/OGLE_ews/2017'
+for entry in sorted(os.listdir(data_path)):
+    if (i < n_events):
+        events.append(entry)
+        print(entry)
+        photometry = np.genfromtxt(data_path + '/' + entry + '/phot.dat', usecols=(0,1,2))
         lightcurves.append(photometry)
         i = i + 1
         
 print("Loaded events:", events)
+
+# Define a tuning schedule for HMC
+n_start = 25
+n_burn = 500
+n_tune = 5000
+n_window = n_start * 2 ** np.arange(np.floor(np.log2((n_tune - n_burn) / n_start)))
+n_window = np.append(n_window, n_tune - n_burn - np.sum(n_window))
+n_window = n_window.astype(int)
+np.random.seed(42)
+
 
 for event_index, lightcurve in enumerate(lightcurves):
     # Pre process the data
@@ -224,25 +292,30 @@ for event_index, lightcurve in enumerate(lightcurves):
     sigF = sigF[:limits[event_index]]
 
     # Fit pymc3 model
-    trace = fit_pymc3_model(t, F, sigF)
+    model = fit_pymc3_model(t, F, sigF)
+
+    with model:
+        pm.sample(2000, tune=4000, nuts_kwargs=dict(target_accept=.95))
+
+    #stats = pm.summary(simple_trace)
+    #dense_time_per_eff = dense_time / stats.n_eff.min()
+    #print("time per effective sample: {0:.5f} ms".format(dense_time_per_eff * 1000))
 
     # Fit emcee model
-    #model_emcee_GP = GP_emcee(t, F, sigF)
-    #sampler_emcee_GP, gp = model_emcee_GP.sample(2000., 20)
+    model_emcee_GP = GP_emcee(t, F, sigF)
+    sampler_emcee_GP, gp = model_emcee_GP.sample(5000., 20)
 
     # Save posterior samples
     samples_pymc3 = pm.trace_to_dataframe(trace, 
         varnames=["ln_sigma", "ln_rho"]).values.T
 
+    samples_emcee_GP = sampler_emcee_GP.chain
 
-    #samples_pymc3 = np.vstack([trace['ln_sigma'], trace['ln_rho']])
-    #samples_emcee_GP = sampler_emcee_GP.chain
-
-    #np.save('samples_emcee.npy', samples_emcee_GP)
+    np.save(events[event_index] + '_samples_emcee.npy', samples_emcee_GP)
     np.save( events[event_index] + '_samples_pymc3.npy', samples_pymc3)
 
     # Save traceplots
-    fig, ax = plt.subplots(3, 2 ,figsize=(10,5))
+    fig, ax = plt.subplots(2, 2 ,figsize=(10,5))
     _ = pm.traceplot(trace, ax=ax)
     plt.savefig(events[event_index] + 'traceplots_celerite_pymc3.png')
 
