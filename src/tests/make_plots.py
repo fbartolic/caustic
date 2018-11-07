@@ -7,7 +7,6 @@ import pymc3 as pm
 import os
 import time
 
-
 import sys
 sys.path.append("../theano_ops")
 sys.path.append("../codebase")
@@ -23,6 +22,8 @@ from celerite import terms as celerite_terms
 from scipy.special import gamma
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
+
+mpl.rc('text', usetex=False)
 
 def solve_for_invgamma_params(params, x_min, x_max):
     """Returns parameters of an inverse gamma distribution p(x) such that 
@@ -49,7 +50,8 @@ class GP_emcee(object):
         self.sigF = sigF
 
         # Set up the GP model
-        term1 = celerite_terms.Matern32Term(log_sigma=np.log(2.), log_rho=np.log(10))
+        term1 = celerite_terms.Matern32Term(log_sigma=np.log(2.), 
+            log_rho=np.log(10))
         kernel = term1
 
         gp = celerite.GP(kernel)
@@ -126,7 +128,6 @@ class GP_emcee(object):
         
         return sampler, self.gp
 
-
 limits = [1700, 1900, 1900, 1700, 2500]
 
 events = [] # event names
@@ -134,7 +135,7 @@ lightcurves = [] # data for each event
  
 i = 0
 n_events = 5
-data_path = '/home/fran/data/OGLE_ews/2017'
+data_path = '/home/star/fb90/data/OGLE_ews/2017'
 for entry in sorted(os.listdir(data_path)):
     if (i < n_events):
         events.append(entry)
@@ -157,22 +158,31 @@ for event_index, lightcurve in enumerate(lightcurves):
 
     # Load samples
     samples_pymc3 = np.load(events[event_index] + '_samples_pymc3.npy')
-    #samples_emcee = np.load(events[event_index] + '_samples_emcee.npy').reshape(-1,
-    #    2).T
+    samples_emcee = np.load(events[event_index] + '_samples_emcee.npy')    
+    
+    # Plot emcee traceplots
+    labels_GP = ['ln_sigma', 'ln_rho']
+    fig1, ax1 = plot_emcee_traceplots(samples_emcee,
+        labels_GP, np.ones(len(samples_emcee)), acceptance_fraction_cutoff=0.05)
+    plt.savefig('output/' + events[event_index] + 'emcee_traceplots.png')    
+
+    # Reshape emcee samples to standard form
+    samples_emcee = samples_emcee.reshape(-1, 2).T
 
     quantiles_pymc3_GP = np.percentile(samples_pymc3,
             [16, 50, 84], axis=1)
-    #quantiles_emcee_GP = np.percentile(samples_emcee,
-    #        [16, 50, 84], axis=1)
+    quantiles_emcee_GP = np.percentile(samples_emcee,
+            [16, 50, 84], axis=1)
 
     model_emcee_GP = GP_emcee(t, F, 1.*sigF)
     gp = model_emcee_GP.gp
 
     median_GP_params_pymc3 = quantiles_pymc3_GP[1, :]
-    #median_GP_params_emcee = quantiles_emcee_GP[1, :]
+    median_GP_params_emcee = quantiles_emcee_GP[1, :]
 
     t_ = np.linspace(t[0], t[-1], 5000)
 
+    
     # pymc3 residuals
     gp.set_parameter_vector(median_GP_params_pymc3)
     gp.compute(t, 1.*sigF)
@@ -180,10 +190,10 @@ for event_index, lightcurve in enumerate(lightcurves):
     residuals_GP_pymc3 = F - gp.predict(F, t, return_cov=False)
 
     # emcee residuals
-    #gp.set_parameter_vector(median_GP_params_emcee)
-    #gp.compute(t, 1.*sigF)
-    #mu_emcee = gp.predict(F, t_, return_cov=False)
-    #residuals_GP_emcee = F - gp.predict(F, t, return_cov=False)
+    gp.set_parameter_vector(median_GP_params_emcee)
+    gp.compute(t, 1.*sigF)
+    mu_emcee = gp.predict(F, t_, return_cov=False)
+    residuals_GP_emcee = F - gp.predict(F, t, return_cov=False)
 
     def plot_posterior_samples(ax, samples):
         samples = samples.T
@@ -204,22 +214,22 @@ for event_index, lightcurve in enumerate(lightcurves):
     plot_posterior_samples(ax, samples_pymc3)
     plt.savefig('output/' + events[event_index] + '_model_pymc3_GP.png')    
 
-#    plt.clf()
-#    fig, ax = plt.subplots(figsize=(25, 6))
-#    plot_data(ax, t, F, sigF) # Plot data
-#    ax.set_xlim(t[0], t[-1])
-#    plot_posterior_samples(ax, samples_emcee)
-#    plt.savefig('output/' + events[event_index] + '_model_emcee_GP.png')    
+    plt.clf()
+    fig, ax = plt.subplots(figsize=(25, 6))
+    plot_data(ax, t, F, sigF) # Plot data
+    ax.set_xlim(t[0], t[-1])
+    plot_posterior_samples(ax, samples_emcee)
+    plt.savefig('output/' + events[event_index] + '_model_emcee_GP.png')    
 #
     # Plot corner plot pymc3
     plt.clf()
-    fig = corner.corner(samples_pymc3.reshape(-1, 2))
+    fig = corner.corner(samples_pymc3.T)
     fig.constrained_layout = True
     plt.savefig('output/' + events[event_index] + '_corner_pymc3.png')
 
     # Plot corner plot emcee
-    #plt.clf()
-    #fig = corner.corner(samples_emcee.reshape(-1, 2))
-    #fig.constrained_layout = True
-    #plt.savefig('output/' + events[event_index] + '_corner_emcee.png')
+    plt.clf()
+    fig = corner.corner(samples_emcee.reshape(-1, 2))
+    fig.constrained_layout = True
+    plt.savefig('output/' + events[event_index] + '_corner_emcee.png')
 

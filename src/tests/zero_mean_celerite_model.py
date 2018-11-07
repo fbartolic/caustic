@@ -34,6 +34,8 @@ from scipy.special import gamma
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
 
+
+print("PyMC3 version {0}".format(pm.__version__))
 mpl.rc('text', usetex=False)
 
 # DFM's pymc3 hack for estimating off-diagonal mass-matrix terms in NUTS during
@@ -84,7 +86,7 @@ def solve_for_invgamma_params(params, x_min, x_max):
     def inverse_gamma_cdf(x, alpha, beta):
         return invgamma.cdf(x, alpha, scale=beta)
 
-    lower_mass = 0.001
+    lower_mass = 0.01
     upper_mass = 0.99
 
     # Trial parameters
@@ -101,7 +103,8 @@ class GP_emcee(object):
         self.sigF = sigF
 
         # Set up the GP model
-        term1 = celerite_terms.Matern32Term(log_sigma=np.log(2.), log_rho=np.log(10))
+        term1 = celerite_terms.Matern32Term(log_sigma=np.log(2.), 
+            log_rho=np.log(10.))
         kernel = term1
 
         gp = celerite.GP(kernel)
@@ -110,6 +113,8 @@ class GP_emcee(object):
         self.gp = gp
 
         print("Initial log-likelihood: {0}".format(gp.log_likelihood(F)))
+        print("Initial ln_sigma", np.log(2))
+        print("Initial ln_rho", np.log(10.))
 
         # Compute parameters for the prior on GP hyperparameters
         a, b =  fsolve(solve_for_invgamma_params, (0.1, 0.1), 
@@ -119,7 +124,6 @@ class GP_emcee(object):
         self.rho_invgamma_params = [a, b]
 
     def log_prior(self, pars):
-
         lnL = 0 
 
         ln_sigma, ln_rho = pars
@@ -151,8 +155,8 @@ class GP_emcee(object):
         #else:
         #    K = 1 - np.log(1 - u_K)
 
-        self.gp.compute(self.t, 1.*self.sigF)
         self.gp.set_parameter_vector((ln_sigma,ln_rho))
+        self.gp.compute(self.t, 1.*self.sigF)
         
         lp = self.log_prior(pars)
         
@@ -162,6 +166,7 @@ class GP_emcee(object):
 
     def sample(self, nsteps, nwalkers):
         initial_pars = self.gp.get_parameter_vector()
+        initial_pars = [-2.5, 5.]
         #initial_pars = np.append(initial_pars_gp, (0,))
 
         ndim, nwalkers = len(initial_pars), nwalkers
@@ -213,8 +218,8 @@ def fit_pymc3_model(t, F, sigF):
         BoundedNormal = pm.Bound(pm.Normal, lower=1.) 
 
         # Parameters
-        ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval=2.)
-        ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval=0.6)
+        ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval=np.log(2.))
+        ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval=np.log(10.))
         #lnK = pm.Normal('lnK', mu=0., sd=1.5, testval=0.)
         #u_K = pm.Uniform('u_K', -1., 1.)
         #K = ifelse(u_K < 0., T.cast(1., 'float64'), 1. - T.log(1. - u_K))
@@ -260,8 +265,8 @@ events = [] # event names
 lightcurves = [] # data for each event
  
 i = 0
-n_events = 5
-data_path = '/home/fran/data/OGLE_ews/2017'
+n_events = 1
+data_path = '/home/star/fb90/data/OGLE_ews/2017'
 for entry in sorted(os.listdir(data_path)):
     if (i < n_events):
         events.append(entry)
@@ -281,7 +286,24 @@ n_window = np.append(n_window, n_tune - n_burn - np.sum(n_window))
 n_window = n_window.astype(int)
 np.random.seed(42)
 
-
+# Fit emcee model
+#for event_index, lightcurve in enumerate(lightcurves):
+#    # Pre process the data
+#    t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
+#        lightcurve[:, 2], standardize=True)
+#
+#    t = t[:limits[event_index]]
+#    F = F[:limits[event_index]]
+#    sigF = sigF[:limits[event_index]]
+#
+#    # Fit emcee model
+#    model_emcee_GP = GP_emcee(t, F, sigF)
+#    sampler_emcee_GP, gp = model_emcee_GP.sample(10000., 20)
+#
+#    # Save posterior samples
+#    samples_emcee_GP = sampler_emcee_GP.chain
+#    np.save(events[event_index] + '_samples_emcee.npy', samples_emcee_GP)
+#
 for event_index, lightcurve in enumerate(lightcurves):
     # Pre process the data
     t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
@@ -295,27 +317,21 @@ for event_index, lightcurve in enumerate(lightcurves):
     model = fit_pymc3_model(t, F, sigF)
 
     with model:
-        pm.sample(2000, tune=4000, nuts_kwargs=dict(target_accept=.95))
+        trace = pm.sample(2000, tune=4000,
+        njobs=8)
 
     #stats = pm.summary(simple_trace)
     #dense_time_per_eff = dense_time / stats.n_eff.min()
     #print("time per effective sample: {0:.5f} ms".format(dense_time_per_eff * 1000))
 
-    # Fit emcee model
-    model_emcee_GP = GP_emcee(t, F, sigF)
-    sampler_emcee_GP, gp = model_emcee_GP.sample(5000., 20)
-
     # Save posterior samples
     samples_pymc3 = pm.trace_to_dataframe(trace, 
         varnames=["ln_sigma", "ln_rho"]).values.T
 
-    samples_emcee_GP = sampler_emcee_GP.chain
-
-    np.save(events[event_index] + '_samples_emcee.npy', samples_emcee_GP)
-    np.save( events[event_index] + '_samples_pymc3.npy', samples_pymc3)
+    np.save(events[event_index] + '_samples_pymc3.npy', samples_pymc3)
 
     # Save traceplots
     fig, ax = plt.subplots(2, 2 ,figsize=(10,5))
     _ = pm.traceplot(trace, ax=ax)
-    plt.savefig(events[event_index] + 'traceplots_celerite_pymc3.png')
+    plt.savefig('output/' + events[event_index] + 'traceplots_celerite_pymc3.png')
 
