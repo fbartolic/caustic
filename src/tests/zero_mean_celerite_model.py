@@ -265,7 +265,7 @@ events = [] # event names
 lightcurves = [] # data for each event
  
 i = 0
-n_events = 1
+n_events = 5
 data_path = '/home/star/fb90/data/OGLE_ews/2017'
 for entry in sorted(os.listdir(data_path)):
     if (i < n_events):
@@ -302,8 +302,8 @@ np.random.seed(42)
 #
 #    # Save posterior samples
 #    samples_emcee_GP = sampler_emcee_GP.chain
-#    np.save(events[event_index] + '_samples_emcee.npy', samples_emcee_GP)
-#
+#    np.save('output/' + events[event_index] + '/samples_emcee.npy', samples_emcee_GP)
+
 for event_index, lightcurve in enumerate(lightcurves):
     # Pre process the data
     t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
@@ -317,8 +317,8 @@ for event_index, lightcurve in enumerate(lightcurves):
     model = fit_pymc3_model(t, F, sigF)
 
     with model:
-        trace = pm.sample(2000, tune=4000,
-        njobs=8)
+        trace = pm.sample(2000, tune=3000, nuts_kwargs=dict(target_accept=.9),
+        njobs=8, progressbar=False)
 
     #stats = pm.summary(simple_trace)
     #dense_time_per_eff = dense_time / stats.n_eff.min()
@@ -328,10 +328,12 @@ for event_index, lightcurve in enumerate(lightcurves):
     samples_pymc3 = pm.trace_to_dataframe(trace, 
         varnames=["ln_sigma", "ln_rho"]).values.T
 
-    np.save(events[event_index] + '_samples_pymc3.npy', samples_pymc3)
+    if not os.path.exists('output/' + events[event_index]):
+        os.makedirs('output/' + events[event_index])
+
+    np.save('output/' + events[event_index] + '/samples_pymc3.npy', samples_pymc3)
 
     # Save traceplots
     fig, ax = plt.subplots(2, 2 ,figsize=(10,5))
     _ = pm.traceplot(trace, ax=ax)
-    plt.savefig('output/' + events[event_index] + 'traceplots_celerite_pymc3.png')
-
+    plt.savefig('output/' + events[event_index] + '/traceplots_celerite_pymc3.png')

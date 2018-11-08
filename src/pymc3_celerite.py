@@ -73,14 +73,14 @@ def solve_for_invgamma_params(params, x_min, x_max):
     def inverse_gamma_cdf(x, alpha, beta):
         return invgamma.cdf(x, alpha, scale=beta)
 
-    lower_mass = 0.001
+    lower_mass = 0.01
     upper_mass = 0.99
 
     # Trial parameters
     alpha, beta = params
 
     # Equation for the roots defining params which satisfy the constraint
-    return (inverse_gamma_cdf(2*x_min, alpha, beta) - \
+    return (inverse_gamma_cdf(x_min, alpha, beta) - \
     lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
 
 
@@ -127,15 +127,15 @@ def fit_pymc3_model(t, F, sigF):
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
 
         # Model parameters
-#        ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval = 0.6)
-#        ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval=2.)
+        ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval = 0.6)
+        ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval=2.)
         DeltaF = BoundedNormal('DeltaF', mu=np.max(F), sd=1., testval=3.)
         Fb = pm.Normal('Fb', mu=0., sd=0.1, testval=0.)
         t0 = pm.Uniform('t0', 0, 1.) 
         teff_tE = pm.DensityDist('teff_tE', joint_density, shape=2, 
             testval = [0.1, 10.])
-        u_K = pm.Uniform('u_K', -1., 1., testval=0.4)
-        K = ifelse(u_K < 0., T.cast(1., 'float64'), 1. - T.log(1. - u_K))
+       # u_K = pm.Uniform('u_K', -1., 1., testval=0.4)
+       # K = ifelse(u_K < 0., T.cast(1., 'float64'), 1. - T.log(1. - u_K))
 
         # Calculate likelihood
         def custom_log_likelihood(t, F, sigF):
@@ -148,10 +148,10 @@ def fit_pymc3_model(t, F, sigF):
 
             mean_function = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
 
-            kernel = terms.Matern32Term(sigma=T.exp(-5.), rho=T.exp(20.))
+            kernel = terms.Matern32Term(sigma=T.exp(ln_sigma), rho=T.exp(ln_rho))
 
             loglike = log_likelihood(kernel, mean_function,
-                K*sigF, t, F)
+                sigF, t, F)
 
             return loglike 
 
@@ -176,8 +176,8 @@ def fit_pymc3_model(t, F, sigF):
             print(RV.name, RV.logp(model.test_point))
 
         # Fit model with NUTS
-        trace = pm.sample(1000, tune=1000, nuts_kwargs=dict(target_accept=.95),
-         start=start)
+        trace = pm.sample(200, tune=100, nuts_kwargs=dict(target_accept=.95),
+         njobs=10, start=start)
 
         # DFM's optimized sampling procedure
 #        burnin_trace = None
@@ -227,12 +227,12 @@ for event_index, lightcurve in enumerate(lightcurves):
     # Save posterior samples
     samples_pymc3 = np.vstack([trace['DeltaF'],trace['Fb'],trace['t0'],
                          trace['teff_tE'][:, 0],trace['teff_tE'][:, 1],
-                         trace['u_K']]).T
+                         trace['ln_sigma'], trace['ln_rho']]).T
 
     np.save('output/' + events[event_index] + '/samples_pymc3_celerite.npy', 
         samples_pymc3)
 
     # Save traceplots
-    fig, ax = plt.subplots(5, 2 ,figsize=(10,10))
+    fig, ax = plt.subplots(6, 2 ,figsize=(10,10))
     _ = pm.traceplot(trace, ax=ax)
     plt.savefig('output/' + events[event_index] + '/traceplots_celerite_pymc3.png')

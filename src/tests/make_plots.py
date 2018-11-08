@@ -157,14 +157,14 @@ for event_index, lightcurve in enumerate(lightcurves):
     sigF = sigF[:limits[event_index]]
 
     # Load samples
-    samples_pymc3 = np.load(events[event_index] + '_samples_pymc3.npy')
-    samples_emcee = np.load(events[event_index] + '_samples_emcee.npy')    
+    samples_pymc3 = np.load('output/' + events[event_index] + '/samples_pymc3.npy')
+    samples_emcee = np.load('output/' + events[event_index] + '/samples_emcee.npy')    
     
     # Plot emcee traceplots
     labels_GP = ['ln_sigma', 'ln_rho']
     fig1, ax1 = plot_emcee_traceplots(samples_emcee,
         labels_GP, np.ones(len(samples_emcee)), acceptance_fraction_cutoff=0.05)
-    plt.savefig('output/' + events[event_index] + 'emcee_traceplots.png')    
+    plt.savefig('output/' + events[event_index] + '/emcee_traceplots.png')    
 
     # Reshape emcee samples to standard form
     samples_emcee = samples_emcee.reshape(-1, 2).T
@@ -212,24 +212,24 @@ for event_index, lightcurve in enumerate(lightcurves):
     plot_data(ax, t, F, sigF) # Plot data
     ax.set_xlim(t[0], t[-1])
     plot_posterior_samples(ax, samples_pymc3)
-    plt.savefig('output/' + events[event_index] + '_model_pymc3_GP.png')    
+    plt.savefig('output/' + events[event_index] + '/model_pymc3_GP.png')    
 
     plt.clf()
     fig, ax = plt.subplots(figsize=(25, 6))
     plot_data(ax, t, F, sigF) # Plot data
     ax.set_xlim(t[0], t[-1])
     plot_posterior_samples(ax, samples_emcee)
-    plt.savefig('output/' + events[event_index] + '_model_emcee_GP.png')    
+    plt.savefig('output/' + events[event_index] + '/model_emcee_GP.png')    
 #
     # Plot corner plot pymc3
     plt.clf()
     fig = corner.corner(samples_pymc3.T)
     fig.constrained_layout = True
-    plt.savefig('output/' + events[event_index] + '_corner_pymc3.png')
+    plt.savefig('output/' + events[event_index] + '/corner_pymc3.png')
 
     # Plot corner plot emcee
     plt.clf()
     fig = corner.corner(samples_emcee.reshape(-1, 2))
     fig.constrained_layout = True
-    plt.savefig('output/' + events[event_index] + '_corner_emcee.png')
+    plt.savefig('output/' + events[event_index] + '/corner_emcee.png')
 
