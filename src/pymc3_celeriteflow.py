@@ -154,7 +154,7 @@ class _TensorFlowGradOp(tt.Op):
             outputs[i][0] = np.array(r)
 
 
-def log_likelihood(t, F, sigF, DeltaF, Fb, t0, teff, tE, u_K, ln_sigma, ln_rho):
+def log_likelihood(t, F, varF, DeltaF, Fb, t0, teff, tE, u_K, ln_sigma, ln_rho):
     """Custom log-likelihood implemented in tensorflow.
     
     Parameters
@@ -165,8 +165,8 @@ def log_likelihood(t, F, sigF, DeltaF, Fb, t0, teff, tE, u_K, ln_sigma, ln_rho):
     F : tf tensor
         Flux tensor. 
 
-    sigF : tensor
-        Flux errors. 
+    varF : tensor
+        Flux variances. 
 
     params : list(tf tensor)
 
@@ -194,7 +194,7 @@ def log_likelihood(t, F, sigF, DeltaF, Fb, t0, teff, tE, u_K, ln_sigma, ln_rho):
     #gp = cf.GaussianProcess(kernel, t, F, K*sigF)
 
     # Evaluate log-likelihood
-    solver = cf.Solver(kernel, t, K*sigF)
+    solver = cf.Solver(kernel, t, (K*tf.sqrt(varF))**2)
     alpha = solver.apply_inverse(F[:, None])
     log_likelihood = -0.5 * (
         tf.squeeze(
@@ -236,7 +236,9 @@ def fit_pymc3_model(t, F, sigF):
     
     session.run(tf.global_variables_initializer())
 
-    log_likelihood_tensor = log_likelihood(t, F, sigF, DeltaF_tens, Fb_tens,
+    # IMPORTANT - likelihood function takes diagonal variances rather than
+    # standard deviations
+    log_likelihood_tensor = log_likelihood(t, F, sigF**2, DeltaF_tens, Fb_tens,
         t0_tens, teff_tens, tE_tens, u_K_tens, ln_sigma_tens, ln_rho_tens)
 
     tf_loglike = TensorFlowOp(log_likelihood_tensor, [DeltaF_tens, Fb_tens, t0_tens, 

@@ -138,7 +138,7 @@ def fit_pymc3_model(t, F, sigF):
        # K = ifelse(u_K < 0., T.cast(1., 'float64'), 1. - T.log(1. - u_K))
 
         # Calculate likelihood
-        def custom_log_likelihood(t, F, sigF):
+        def custom_log_likelihood(t, F, varF):
             # Set up mean model
             u0 = teff/tE
             
@@ -151,7 +151,7 @@ def fit_pymc3_model(t, F, sigF):
             kernel = terms.Matern32Term(sigma=T.exp(ln_sigma), rho=T.exp(ln_rho))
 
             loglike = log_likelihood(kernel, mean_function,
-                sigF, t, F)
+                varF, t, F)
 
             return loglike 
 
@@ -163,7 +163,7 @@ def fit_pymc3_model(t, F, sigF):
         u0 = teff/tE
 
         logl = pm.DensityDist('logl', custom_log_likelihood, 
-            observed={'t': t, 'F':F, 'sigF': sigF})
+            observed={'t': t, 'F':F, 'varF': sigF**2})
 
         # Initial parameters for the sampler
         t0_guess_idx = (np.abs(F - np.max(F))).argmin()
