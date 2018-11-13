@@ -143,10 +143,21 @@ for entry in sorted(os.listdir(data_path)):
         photometry = np.genfromtxt(data_path + '/' + entry + '/phot.dat', usecols=(0,1,2))
         lightcurves.append(photometry)
         i = i + 1
-
         
 print("Loaded events:", events)
 
+def plot_posterior_samples(ax, samples):
+    samples = samples.T
+
+    for s in samples[np.random.randint(len(samples), 
+            size=100)]:
+        gp.set_parameter_vector(s[:-1])
+        gp.compute(t, (1. + np.exp(s[-1]))*sigF)
+        mu = gp.predict(F, t_, return_cov=False)
+        ax.plot(t_, mu, color='C1', alpha=0.3)
+    ax.grid(True)
+
+# Make pymc3 plots
 for event_index, lightcurve in enumerate(lightcurves):
     # Pre process the data
     t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
@@ -158,6 +169,47 @@ for event_index, lightcurve in enumerate(lightcurves):
 
     # Load samples
     samples_pymc3 = np.load('output/' + events[event_index] + '/samples_pymc3.npy')
+    quantiles_pymc3_GP = np.percentile(samples_pymc3,
+            [16, 50, 84], axis=1)
+
+    model_emcee_GP = GP_emcee(t, F, sigF)
+    gp = model_emcee_GP.gp
+
+    median_GP_params_pymc3 = quantiles_pymc3_GP[1, :-1]
+
+    t_ = np.linspace(t[0], t[-1], 5000)
+
+    # Residuals
+    gp.set_parameter_vector(median_GP_params_pymc3)
+    gp.compute(t, (1. + np.exp(median_GP_params_pymc3[-1]))*sigF)
+    mu_pymc3 = gp.predict(F, t_, return_cov=False)
+    residuals_GP_pymc3 = F - gp.predict(F, t, return_cov=False)
+
+    # Plot posterior samples pymc3
+    plt.clf()
+    fig, ax = plt.subplots(figsize=(25, 6))
+    plot_data(ax, t, F, sigF) # Plot data
+    ax.set_xlim(t[0], t[-1])
+    plot_posterior_samples(ax, samples_pymc3)
+    plt.savefig('output/' + events[event_index] + '/model_pymc3_GP.png')    
+
+    # Plot corner plot pymc3
+    plt.clf()
+    fig = corner.corner(samples_pymc3.T)
+    fig.constrained_layout = True
+    plt.savefig('output/' + events[event_index] + '/corner_pymc3.png')
+
+# Make emcee plots
+for event_index, lightcurve in enumerate(lightcurves):
+    # Pre process the data
+    t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
+        lightcurve[:, 2], standardize=True)
+
+    t = t[:limits[event_index]]
+    F = F[:limits[event_index]]
+    sigF = sigF[:limits[event_index]]
+
+    # Load samples
     samples_emcee = np.load('output/' + events[event_index] + '/samples_emcee.npy')    
     
     # Plot emcee traceplots
@@ -168,68 +220,31 @@ for event_index, lightcurve in enumerate(lightcurves):
 
     # Reshape emcee samples to standard form
     samples_emcee = samples_emcee.reshape(-1, 2).T
-
-    quantiles_pymc3_GP = np.percentile(samples_pymc3,
-            [16, 50, 84], axis=1)
     quantiles_emcee_GP = np.percentile(samples_emcee,
             [16, 50, 84], axis=1)
-
     model_emcee_GP = GP_emcee(t, F, 1.*sigF)
     gp = model_emcee_GP.gp
 
-    median_GP_params_pymc3 = quantiles_pymc3_GP[1, :]
     median_GP_params_emcee = quantiles_emcee_GP[1, :]
 
     t_ = np.linspace(t[0], t[-1], 5000)
 
-    
-    # pymc3 residuals
-    gp.set_parameter_vector(median_GP_params_pymc3)
-    gp.compute(t, 1.*sigF)
-    mu_pymc3 = gp.predict(F, t_, return_cov=False)
-    residuals_GP_pymc3 = F - gp.predict(F, t, return_cov=False)
-
-    # emcee residuals
+    # Residuals
     gp.set_parameter_vector(median_GP_params_emcee)
     gp.compute(t, 1.*sigF)
     mu_emcee = gp.predict(F, t_, return_cov=False)
     residuals_GP_emcee = F - gp.predict(F, t, return_cov=False)
 
-    def plot_posterior_samples(ax, samples):
-        samples = samples.T
-
-        for s in samples[np.random.randint(len(samples), 
-                size=100)]:
-            gp.set_parameter_vector(s)
-            gp.compute(t, 1.*sigF)
-            mu = gp.predict(F, t_, return_cov=False)
-            ax.plot(t_, mu, color='C1', alpha=0.3)
-        ax.grid(True)
-
-    # Plot posterior samples pymc3
-    plt.clf()
-    fig, ax = plt.subplots(figsize=(25, 6))
-    plot_data(ax, t, F, sigF) # Plot data
-    ax.set_xlim(t[0], t[-1])
-    plot_posterior_samples(ax, samples_pymc3)
-    plt.savefig('output/' + events[event_index] + '/model_pymc3_GP.png')    
-
+    # Plot model
     plt.clf()
     fig, ax = plt.subplots(figsize=(25, 6))
     plot_data(ax, t, F, sigF) # Plot data
     ax.set_xlim(t[0], t[-1])
     plot_posterior_samples(ax, samples_emcee)
     plt.savefig('output/' + events[event_index] + '/model_emcee_GP.png')    
-#
-    # Plot corner plot pymc3
-    plt.clf()
-    fig = corner.corner(samples_pymc3.T)
-    fig.constrained_layout = True
-    plt.savefig('output/' + events[event_index] + '/corner_pymc3.png')
 
     # Plot corner plot emcee
     plt.clf()
     fig = corner.corner(samples_emcee.reshape(-1, 2))
     fig.constrained_layout = True
     plt.savefig('output/' + events[event_index] + '/corner_emcee.png')
-

@@ -174,7 +174,7 @@ class GP_emcee(object):
         p0 = initial_pars + 1e-8 * np.random.randn(nwalkers, ndim)
         sampler = emcee.EnsembleSampler(nwalkers, ndim, self.log_posterior)
 
-        print("Running burn-in...")
+        print("Running burn-in...")#
         p0, _, _ = sampler.run_mcmc(p0, 1000)
         sampler.reset()
 
@@ -220,22 +220,24 @@ def fit_pymc3_model(t, F, sigF):
         # Parameters
         ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval=np.log(2.))
         ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval=np.log(10.))
-        #lnK = pm.Normal('lnK', mu=0., sd=1.5, testval=0.)
+        ln_K = pm.Normal('ln_K', mu=0., sd=1.5, testval=0.)
+        K = T.exp(ln_K) + 1.
         #u_K = pm.Uniform('u_K', -1., 1.)
         #K = ifelse(u_K < 0., T.cast(1., 'float64'), 1. - T.log(1. - u_K))
 
         # Custom likelihood function calling celerite
-        def custom_log_likelihood(t, F, sigF):
+        def custom_log_likelihood(t, F, varF):
             kernel = terms.Matern32Term(sigma=T.exp(ln_sigma), 
                 rho=T.exp(ln_rho))
 
-            loglike = log_likelihood(kernel, 0.,
-                sigF, t, F)
+            loglike = log_likelihood(kernel, 0., varF, t, F)
 
             return loglike 
 
+        # IMPORTANT - custom celerite likelihood requires the variance of 
+        # the diagonal covariance matrix terms, not the standard deviation
         logl = pm.DensityDist('logl', custom_log_likelihood, 
-            observed={'t': t, 'F':F, 'sigF': sigF})
+            observed={'t': t, 'F':F, 'varF': (K*sigF)**2})
 
         for RV in model.basic_RVs:
             print(RV.name, RV.logp(model.test_point))
@@ -253,8 +255,6 @@ def fit_pymc3_model(t, F, sigF):
         #    start = [t[-1] for t in burnin_trace._straces.values()]
 
         #step = get_step_for_trace(burnin_trace, regular_window=0)
-        #dense_trace = pm.sample(draws=5000, tune=n_burn, step=step, start=start)
-        #factor = 5000 / (5000 + np.sum(n_window+2) + n_burn)
         #dense_time = factor * (time.time() - strt)
 
     return model
@@ -317,8 +317,8 @@ for event_index, lightcurve in enumerate(lightcurves):
     model = fit_pymc3_model(t, F, sigF)
 
     with model:
-        trace = pm.sample(2000, tune=3000, nuts_kwargs=dict(target_accept=.9),
-        njobs=8, progressbar=False)
+        trace = pm.sample(2000, tune=3000, nuts_kwargs=dict(target_accept=.95),
+        njobs=4, progressbar=True)
 
     #stats = pm.summary(simple_trace)
     #dense_time_per_eff = dense_time / stats.n_eff.min()
@@ -326,7 +326,7 @@ for event_index, lightcurve in enumerate(lightcurves):
 
     # Save posterior samples
     samples_pymc3 = pm.trace_to_dataframe(trace, 
-        varnames=["ln_sigma", "ln_rho"]).values.T
+        varnames=["ln_sigma", "ln_rho", "ln_K"]).values.T
 
     if not os.path.exists('output/' + events[event_index]):
         os.makedirs('output/' + events[event_index])
@@ -334,6 +334,6 @@ for event_index, lightcurve in enumerate(lightcurves):
     np.save('output/' + events[event_index] + '/samples_pymc3.npy', samples_pymc3)
 
     # Save traceplots
-    fig, ax = plt.subplots(2, 2 ,figsize=(10,5))
+    fig, ax = plt.subplots(3, 2 ,figsize=(10,5))
     _ = pm.traceplot(trace, ax=ax)
     plt.savefig('output/' + events[event_index] + '/traceplots_celerite_pymc3.png')
