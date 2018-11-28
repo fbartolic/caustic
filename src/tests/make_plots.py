@@ -213,13 +213,13 @@ for event_index, lightcurve in enumerate(lightcurves):
     samples_emcee = np.load('output/' + events[event_index] + '/samples_emcee.npy')    
     
     # Plot emcee traceplots
-    labels_GP = ['ln_sigma', 'ln_rho']
+    labels_GP = ['ln_sigma', 'ln_rho', 'ln_K']
     fig1, ax1 = plot_emcee_traceplots(samples_emcee,
         labels_GP, np.ones(len(samples_emcee)), acceptance_fraction_cutoff=0.05)
     plt.savefig('output/' + events[event_index] + '/emcee_traceplots.png')    
 
     # Reshape emcee samples to standard form
-    samples_emcee = samples_emcee.reshape(-1, 2).T
+    samples_emcee = samples_emcee.reshape(-1, len(labels_GP)).T
     quantiles_emcee_GP = np.percentile(samples_emcee,
             [16, 50, 84], axis=1)
     model_emcee_GP = GP_emcee(t, F, 1.*sigF)
@@ -230,7 +230,7 @@ for event_index, lightcurve in enumerate(lightcurves):
     t_ = np.linspace(t[0], t[-1], 5000)
 
     # Residuals
-    gp.set_parameter_vector(median_GP_params_emcee)
+    gp.set_parameter_vector(median_GP_params_emcee[:-1])
     gp.compute(t, 1.*sigF)
     mu_emcee = gp.predict(F, t_, return_cov=False)
     residuals_GP_emcee = F - gp.predict(F, t, return_cov=False)

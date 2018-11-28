@@ -29,11 +29,9 @@ from celerite.modeling import Model # an abstract class implementing the
 # skeleton of the celerite modeling protocol
 from celerite import terms as celerite_terms 
 
-
 from scipy.special import gamma
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
-
 
 print("PyMC3 version {0}".format(pm.__version__))
 mpl.rc('text', usetex=False)
@@ -93,7 +91,7 @@ def solve_for_invgamma_params(params, x_min, x_max):
     alpha, beta = params
 
     # Equation for the roots defining params which satisfy the constraint
-    return (inverse_gamma_cdf(2*x_min, alpha, beta) - \
+    return (inverse_gamma_cdf(10*x_min, alpha, beta) - \
     lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
 
 class GP_emcee(object):
@@ -126,7 +124,7 @@ class GP_emcee(object):
     def log_prior(self, pars):
         lnL = 0 
 
-        ln_sigma, ln_rho = pars
+        ln_sigma, ln_rho, ln_K = pars
 
         # Prior for the GP hyperparameter
         lnpdf_lninvgamma = lambda  x, a, b: np.log(x) + a*np.log(b) -\
@@ -145,18 +143,21 @@ class GP_emcee(object):
         #if u_K < -1 or u_K > 1:
         #    return -np.inf
 
+        # Prior for ln_K
+        lnL += -ln_K**2/1.5**2
+
         return lnL
 
     def log_posterior(self, pars):    
-        ln_sigma, ln_rho = pars
+        ln_sigma, ln_rho, ln_K = pars
 
         #if u_K < 0:
         #    K = 1.
         #else:
         #    K = 1 - np.log(1 - u_K)
 
-        self.gp.set_parameter_vector((ln_sigma,ln_rho))
-        self.gp.compute(self.t, 1.*self.sigF)
+        self.gp.set_parameter_vector((ln_sigma, ln_rho))
+        self.gp.compute(self.t, (1 + np.exp(ln_K))*self.sigF)
         
         lp = self.log_prior(pars)
         
@@ -165,9 +166,8 @@ class GP_emcee(object):
         return self.gp.log_likelihood(self.F) + lp 
 
     def sample(self, nsteps, nwalkers):
-        initial_pars = self.gp.get_parameter_vector()
-        initial_pars = [-2.5, 5.]
-        #initial_pars = np.append(initial_pars_gp, (0,))
+        #initial_pars = self.gp.get_parameter_vector()
+        initial_pars = [-2.5, 5., -0.4]
 
         ndim, nwalkers = len(initial_pars), nwalkers
         print("ndim:   ", ndim)
@@ -219,7 +219,9 @@ def fit_pymc3_model(t, F, sigF):
 
         # Parameters
         ln_sigma = pm.DensityDist('ln_sigma', ln_sigma_prior, testval=np.log(2.))
-        ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval=np.log(10.))
+        #ln_rho = pm.DensityDist('ln_rho', ln_rho_prior, testval=np.log(10.))
+        #ln_sigma = pm.Uniform('ln_sigma', -5, 0)
+        ln_rho = pm.Normal('ln_rho', 2, 10)
         ln_K = pm.Normal('ln_K', mu=0., sd=1.5, testval=0.)
         K = T.exp(ln_K) + 1.
         #u_K = pm.Uniform('u_K', -1., 1.)
@@ -242,8 +244,6 @@ def fit_pymc3_model(t, F, sigF):
         for RV in model.basic_RVs:
             print(RV.name, RV.logp(model.test_point))
 
-        # Fit model with NUTS
-        #trace = pm.sample(2000, tune=4000, nuts_kwargs=dict(target_accept=.95))
 
         # DFM's optimized sampling procedure
         #burnin_trace = None
@@ -298,10 +298,11 @@ np.random.seed(42)
 #
 #    # Fit emcee model
 #    model_emcee_GP = GP_emcee(t, F, sigF)
-#    sampler_emcee_GP, gp = model_emcee_GP.sample(10000., 20)
+#    sampler_emcee_GP, gp = model_emcee_GP.sample(5000, 25)
 #
 #    # Save posterior samples
 #    samples_emcee_GP = sampler_emcee_GP.chain
+#    print(np.shape(sampler_emcee_GP))
 #    np.save('output/' + events[event_index] + '/samples_emcee.npy', samples_emcee_GP)
 
 for event_index, lightcurve in enumerate(lightcurves):
@@ -317,13 +318,16 @@ for event_index, lightcurve in enumerate(lightcurves):
     model = fit_pymc3_model(t, F, sigF)
 
     with model:
-        trace = pm.sample(2000, tune=3000, nuts_kwargs=dict(target_accept=.95),
-        njobs=4, progressbar=True)
+        trace = pm.sample(1000, tune=1000, nuts_kwargs=dict(target_accept=.9),
+        njobs=4, progressbar=True, transform=None)
+        #step = pm.Metropolis()
+        #trace = pm.sample(5000, step)
 
-    #stats = pm.summary(simple_trace)
-    #dense_time_per_eff = dense_time / stats.n_eff.min()
-    #print("time per effective sample: {0:.5f} ms".format(dense_time_per_eff * 1000))
-
+    stats = pm.summary(trace)
+    stats.to_csv('output/' + events[event_index] + '/summary.npy')
+#    dense_time_per_eff = dense_time / stats.n_eff.min()
+#    print("time per effective sample: {0:.5f} ms".format(dense_time_per_eff * 1000))
+#
     # Save posterior samples
     samples_pymc3 = pm.trace_to_dataframe(trace, 
         varnames=["ln_sigma", "ln_rho", "ln_K"]).values.T
@@ -337,3 +341,15 @@ for event_index, lightcurve in enumerate(lightcurves):
     fig, ax = plt.subplots(3, 2 ,figsize=(10,5))
     _ = pm.traceplot(trace, ax=ax)
     plt.savefig('output/' + events[event_index] + '/traceplots_celerite_pymc3.png')
+
+    # display the total number and percentage of divergent
+    divergent = trace['diverging']
+    print('Number of Divergent %d' % divergent.nonzero()[0].size)
+    divperc = divergent.nonzero()[0].size / len(trace) * 100
+    print('Percentage of Divergent %.1f' % divperc)
+
+    pm.pairplot(trace,
+            sub_varnames=['ln_sigma','ln_rho'],
+            divergences=True,
+            color='C3', figsize=(10, 5), kwargs_divergence={'color':'C2'})
+    plt.savefig('output/' + events[event_index] + '/divergences.png')

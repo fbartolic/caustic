@@ -134,8 +134,8 @@ def fit_pymc3_model(t, F, sigF):
         t0 = pm.Uniform('t0', 0, 1.) 
         teff_tE = pm.DensityDist('teff_tE', joint_density, shape=2, 
             testval = [0.1, 10.])
-       # u_K = pm.Uniform('u_K', -1., 1., testval=0.4)
-       # K = ifelse(u_K < 0., T.cast(1., 'float64'), 1. - T.log(1. - u_K))
+        ln_K = pm.Normal('ln_K', mu=0., sd=1.5, testval=0.)
+        K = T.exp(ln_K) + 1.
 
         # Calculate likelihood
         def custom_log_likelihood(t, F, varF):
@@ -163,7 +163,7 @@ def fit_pymc3_model(t, F, sigF):
         u0 = teff/tE
 
         logl = pm.DensityDist('logl', custom_log_likelihood, 
-            observed={'t': t, 'F':F, 'varF': sigF**2})
+            observed={'t': t, 'F':F, 'varF': (K*sigF)**2})
 
         # Initial parameters for the sampler
         t0_guess_idx = (np.abs(F - np.max(F))).argmin()
@@ -174,10 +174,6 @@ def fit_pymc3_model(t, F, sigF):
 
         for RV in model.basic_RVs:
             print(RV.name, RV.logp(model.test_point))
-
-        # Fit model with NUTS
-        trace = pm.sample(200, tune=100, nuts_kwargs=dict(target_accept=.95),
-         njobs=10, start=start)
 
         # DFM's optimized sampling procedure
 #        burnin_trace = None
@@ -193,7 +189,7 @@ def fit_pymc3_model(t, F, sigF):
 #        factor = 5000 / (5000 + np.sum(n_window+2) + n_burn)
 #        dense_time = factor * (time.time() - strt)
 
-    return trace
+    return model
 
 events = [] # event names
 lightcurves = [] # data for each event
@@ -219,7 +215,12 @@ for event_index, lightcurve in enumerate(lightcurves):
 #    sigF = sigF[:1700]
 
     # Fit pymc3 model
-    trace = fit_pymc3_model(t, F, sigF)
+    model = fit_pymc3_model(t, F, sigF)
+
+    with model:
+        trace = pm.sample(2000, tune=3000, nuts_kwargs=dict(target_accept=.95),
+        njobs=4, progressbar=True)
+
     #pm.summary(trace)
     #dense_time_per_eff = dense_time / stats.n_eff.min()
     #print("time per effective sample: {0:.5f} ms".format(dense_time_per_eff * 1000))
@@ -227,12 +228,12 @@ for event_index, lightcurve in enumerate(lightcurves):
     # Save posterior samples
     samples_pymc3 = np.vstack([trace['DeltaF'],trace['Fb'],trace['t0'],
                          trace['teff_tE'][:, 0],trace['teff_tE'][:, 1],
-                         trace['ln_sigma'], trace['ln_rho']]).T
+                         trace['ln_sigma'], trace['ln_rho'], trace['ln_K']]).T
 
     np.save('output/' + events[event_index] + '/samples_pymc3_celerite.npy', 
         samples_pymc3)
 
     # Save traceplots
-    fig, ax = plt.subplots(6, 2 ,figsize=(10,10))
+    fig, ax = plt.subplots(7, 2 ,figsize=(10,10))
     _ = pm.traceplot(trace, ax=ax)
     plt.savefig('output/' + events[event_index] + '/traceplots_celerite_pymc3.png')
