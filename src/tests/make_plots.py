@@ -5,7 +5,6 @@ import scipy
 import corner
 import pymc3 as pm
 import os
-import time
 
 import sys
 sys.path.append("../theano_ops")
@@ -13,7 +12,6 @@ sys.path.append("../codebase")
 from data_preprocessing_ogle import process_data
 from plotting_utils import *
 
-import emcee
 import celerite
 from celerite.modeling import Model # an abstract class implementing the 
 # skeleton of the celerite modeling protocol
@@ -24,24 +22,6 @@ from scipy.stats import invgamma
 from scipy.optimize import fsolve
 
 mpl.rc('text', usetex=False)
-
-def solve_for_invgamma_params(params, x_min, x_max):
-    """Returns parameters of an inverse gamma distribution p(x) such that 
-    0.1% of total prob. mass is assigned to values of x < x_min and 
-    1% of total prob. masss  to values greater than x_max."""
-    def inverse_gamma_cdf(x, alpha, beta):
-        return invgamma.cdf(x, alpha, scale=beta)
-
-    lower_mass = 0.001
-    upper_mass = 0.99
-
-    # Trial parameters
-    alpha, beta = params
-
-    # Equation for the roots defining params which satisfy the constraint
-    return (inverse_gamma_cdf(2*x_min, alpha, beta) - \
-    lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
-
 
 class GP_emcee(object):
     def __init__(self, t, F, sigF, *args, **kwargs):
@@ -128,6 +108,23 @@ class GP_emcee(object):
         
         return sampler, self.gp
 
+def solve_for_invgamma_params(params, x_min, x_max):
+    """Returns parameters of an inverse gamma distribution p(x) such that 
+    0.1% of total prob. mass is assigned to values of x < x_min and 
+    1% of total prob. masss  to values greater than x_max."""
+    def inverse_gamma_cdf(x, alpha, beta):
+        return invgamma.cdf(x, alpha, scale=beta)
+
+    lower_mass = 0.001
+    upper_mass = 0.99
+
+    # Trial parameters
+    alpha, beta = params
+
+    # Equation for the roots defining params which satisfy the constraint
+    return (inverse_gamma_cdf(2*x_min, alpha, beta) - \
+    lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
+
 limits = [1700, 1900, 1900, 1700, 2500]
 
 events = [] # event names
@@ -150,14 +147,21 @@ def plot_posterior_samples(ax, samples):
     samples = samples.T
 
     for s in samples[np.random.randint(len(samples), 
-            size=100)]:
+            size=50)]:
         gp.set_parameter_vector(s[:-1])
         gp.compute(t, (1. + np.exp(s[-1]))*sigF)
-        mu = gp.predict(F, t_, return_cov=False)
-        ax.plot(t_, mu, color='C1', alpha=0.3)
+        mu, var = gp.predict(F, t_, return_var=True)
+
+        sd = np.sqrt(var)
+        label = None if i else "prediction"
+        art = plt.fill_between(t_, mu+sd, mu-sd, color="C1", alpha=0.1)
+        art.set_edgecolor("none")
+        ax.plot(t_, mu, color="C1", label=label, alpha=0.1)
+
+
+        #ax.plot(t_, mu, color='C1', alpha=0.3)
     ax.grid(True)
 
-# Make pymc3 plots
 for event_index, lightcurve in enumerate(lightcurves):
     # Pre process the data
     t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
@@ -193,58 +197,9 @@ for event_index, lightcurve in enumerate(lightcurves):
     plot_posterior_samples(ax, samples_pymc3)
     plt.savefig('output/' + events[event_index] + '/model_pymc3_GP.png')    
 
+
     # Plot corner plot pymc3
     plt.clf()
     fig = corner.corner(samples_pymc3.T)
     fig.constrained_layout = True
     plt.savefig('output/' + events[event_index] + '/corner_pymc3.png')
-
-# Make emcee plots
-for event_index, lightcurve in enumerate(lightcurves):
-    # Pre process the data
-    t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
-        lightcurve[:, 2], standardize=True)
-
-    t = t[:limits[event_index]]
-    F = F[:limits[event_index]]
-    sigF = sigF[:limits[event_index]]
-
-    # Load samples
-    samples_emcee = np.load('output/' + events[event_index] + '/samples_emcee.npy')    
-    
-    # Plot emcee traceplots
-    labels_GP = ['ln_sigma', 'ln_rho', 'ln_K']
-    fig1, ax1 = plot_emcee_traceplots(samples_emcee,
-        labels_GP, np.ones(len(samples_emcee)), acceptance_fraction_cutoff=0.05)
-    plt.savefig('output/' + events[event_index] + '/emcee_traceplots.png')    
-
-    # Reshape emcee samples to standard form
-    samples_emcee = samples_emcee.reshape(-1, len(labels_GP)).T
-    quantiles_emcee_GP = np.percentile(samples_emcee,
-            [16, 50, 84], axis=1)
-    model_emcee_GP = GP_emcee(t, F, 1.*sigF)
-    gp = model_emcee_GP.gp
-
-    median_GP_params_emcee = quantiles_emcee_GP[1, :]
-
-    t_ = np.linspace(t[0], t[-1], 5000)
-
-    # Residuals
-    gp.set_parameter_vector(median_GP_params_emcee[:-1])
-    gp.compute(t, 1.*sigF)
-    mu_emcee = gp.predict(F, t_, return_cov=False)
-    residuals_GP_emcee = F - gp.predict(F, t, return_cov=False)
-
-    # Plot model
-    plt.clf()
-    fig, ax = plt.subplots(figsize=(25, 6))
-    plot_data(ax, t, F, sigF) # Plot data
-    ax.set_xlim(t[0], t[-1])
-    plot_posterior_samples(ax, samples_emcee)
-    plt.savefig('output/' + events[event_index] + '/model_emcee_GP.png')    
-
-    # Plot corner plot emcee
-    plt.clf()
-    fig = corner.corner(samples_emcee.reshape(-1, 2))
-    fig.constrained_layout = True
-    plt.savefig('output/' + events[event_index] + '/corner_emcee.png')

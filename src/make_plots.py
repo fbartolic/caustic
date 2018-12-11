@@ -1,23 +1,25 @@
 import numpy as np
 from matplotlib import pyplot as plt
 import matplotlib as mpl
-import pandas as pd
-import scipy
-import corner
-import emcee
+import seaborn as sns
+import os
+import sys
+sys.path.append("../../exoplanet")
+sys.path.append("codebase")
+
 import pymc3 as pm
 import theano
 import theano.tensor as T
 from theano.ifelse import ifelse
-import seaborn as sns
-import os
-import sys
-sys.path.append('codebase')
+import exoplanet as xo
+from exoplanet.gp import terms, GP
+from exoplanet.utils import get_samples_from_trace
+from exoplanet.utils import eval_in_model
+
 from data_preprocessing_ogle import process_data
 from plotting_utils import *
+from SingleLensModelMatern32 import initialize_model
 
-from emcee_model import PointSourcePointLens_emcee
-from emcee_gp_model import PointSourcePointLensGP_emcee
 
 mpl.rc('font',**{'family':'serif','serif':['Palatino']})
 mpl.rc('text', usetex=False)
@@ -49,45 +51,19 @@ for entry in os.scandir('output'):
         data = np.load(entry.path + '/data.npy')
         t, F, sigF = data[:, 0], data[:, 1], data[:, 2]
         
-        # Load emcee model
-        model_emcee = PointSourcePointLens_emcee(t, F, sigF)
-
-        # Load emcee model with GP
-        model_emcee_GP = PointSourcePointLensGP_emcee(t, F, sigF)
-
         # Load posterior samples
-        samples_pymc3 = np.load(entry.path + '/samples_pymc3.npy')
-        samples_emcee = np.load(entry.path + '/samples_emcee.npy')
-        samples_emcee_GP = np.load(entry.path + '/samples_emcee_GP.npy')
-        samples_emcee_acc_frac = np.load(entry.path + \
-            '/samples_emcee_acc_frac.npy')
-        samples_emcee_GP_acc_frac = np.load(entry.path + \
-            '/samples_emcee_GP_acc_frac.npy')
-        samples_pymc3_celerite = np.load(entry.path +\
-             '/samples_pymc3_celerite.npy')
+        samples = np.load(entry.path + '/PointSourcePointLens' + '/samples_pymc3.npy')
+        samples_GP = np.load(entry.path + '/PointSourcePointLensGP' +\
+            '/samples_pymc3.npy')
         
-        # Plot traceplots
-        labels = ['$\Delta F$', '$F_b$', '$t_0$', '$t_{eff}$', '$t_E$', '$u_K$']
-        labels_GP = ['$\ln\sigma$', 'ln_rho','$\Delta F$', 
-            '$F_b$', '$t_0$', '$t_{eff}$', '$t_E$', '$u_K$']
-
-        fig1, ax1 = plot_emcee_traceplots(samples_emcee,
-            labels, samples_emcee_acc_frac, acceptance_fraction_cutoff=0.05)
-        plt.savefig(entry.path + '/emcee_traceplots.png')    
-
-        fig2, ax2 = plot_emcee_traceplots(samples_emcee_GP,
-            labels_GP, samples_emcee_GP_acc_frac, 
-                acceptance_fraction_cutoff=0.05)
-        plt.savefig(entry.path + '/emcee_GP_traceplots.png')    
+        labels = ['$\Delta F$', '$F_b$', '$ln_K$', '$t_0$', '$t_{eff}$', 
+            '$t_E$', '$ln_K$']
+        labels_GP = ['$\ln\sigma$', 'ln_rho', 'ln_K', '$\Delta F$', 
+            '$F_b$', '$t_0$', '$t_{eff}$', '$t_E$']
 
         # Plot median models
-        quantiles_pymc3 = np.percentile(samples_pymc3, [16, 50, 84], axis=0)
-        quantiles_emcee = np.percentile(samples_emcee.reshape(-1, len(labels)), 
-            [16, 50, 84], axis=0)
-        quantiles_emcee_GP = \
-            np.percentile(samples_emcee_GP.reshape(-1, len(labels_GP)), 
-            [16, 50, 84], axis=0)
-        quantiles_pymc3_celerite = np.percentile(samples_pymc3_celerite, 
+        quantiles = np.percentile(samples, [16, 50, 84], axis=0)
+        quantiles_GP = np.percentile(samples_GP, 
             [16, 50, 84], axis=0)
 
         t_ = np.linspace(t[0], t[-1], 1000)
@@ -95,101 +71,132 @@ for entry in os.scandir('output'):
         plt.clf()
 
         ## Calculate residuals
-        residuals_pymc3 = F - \
-            model_emcee.forward_model(quantiles_pymc3[1], t)
-        residuals_emcee = F - \
-            model_emcee.forward_model(quantiles_emcee[1], t)
+#        model_emcee = PointSourcePointLens_emcee(t, F, sigF)
+#        residuals = F - \
+#            model_emcee.forward_model(quantiles[1], t)
+#
+#        fig, ax = plot_data_and_median_model(t, F, sigF, 
+#            model_emcee.forward_model(quantiles[1], t_), 
+#            residuals, 'NUTS')
+#        plt.savefig(entry.path + '/PointSourcePointLens' + '/model.png')    
+#
+        # Set up GP model
+        model, gp = initialize_model(t, F, sigF)
+        with model:
+            trace = pm.load_trace(entry.path + '/PointSourcePointLensGP/' +\
+            'samples.trace') 
 
-        fig, ax = plot_data_and_median_model(t, F, sigF, 
-            model_emcee.forward_model(quantiles_pymc3[1], t_), 
-            residuals_pymc3, 'NUTS')
-        plt.savefig(entry.path +  '/model_pymc3.png')    
+        t_ = np.linspace(t[0], t[-1], 5000)
 
-        fig, ax = plot_data_and_median_model(t, F, sigF, 
-            model_emcee.forward_model(quantiles_emcee[1], t_), 
-            residuals_emcee, 'emcee')
-        plt.savefig(entry.path +  '/model_emcee.png')    
-
-        ## Calculate median GP emcee model
-        samples_GP = samples_emcee_GP.reshape(-1, len(labels_GP))
-        model_emcee_GP = PointSourcePointLensGP_emcee(t, F, sigF)
-        quantiles_emcee_GP = np.percentile(samples_GP,
-             [16, 50, 84], axis=0)
-
-        median_GP_params = quantiles_emcee_GP[1, :]
-        gp = model_emcee_GP.gp
-        gp.set_parameter_vector(median_GP_params[:-1])
-        u_K = median_GP_params[-1]
-        if u_K < 0:
-            K = 1.
-        else:
-            K = 1 - np.log(1 - u_K)
-
-        gp.compute(t, K*sigF)
-        mu = gp.predict(F, t_, return_cov=False)
-        residuals_GP = F - gp.predict(F, t, return_cov=False)
-
-        plt.clf()
-        fig, ax = plot_data_and_median_model(t, F, sigF, mu,
-            residuals_GP, 'GP model')
-        plt.savefig(entry.path +  '/model_GP_median.png')    
-
-
-        # Plot a Quantile-Quantile plot (QQ plot)
-        plt.clf()
-        fig, ax = plt.subplots(figsize=(6,6))
-        qq_plot(ax, residuals_pymc3)
-        plt.savefig(entry.path + '/QQ_plot.png')    
-        
-
-        # PPC - samples from posterior in data space
-        plt.clf()
-        fig, ax = plt.subplots(figsize=(15, 6))
-        plot_data(ax, t, F, sigF) # Plot data
-
-        for s in samples_GP[np.random.randint(len(samples_GP), 
-                size=50)]:
-            gp.set_parameter_vector(s[:-1])
-            gp.compute(t, s[-1]*sigF)
-            mu = gp.predict(F, t_, return_cov=False)
-            ax.plot(t_, mu, color='C1', alpha=0.3)
+        # Generate 50 realizations of the prediction sampling randomly from the chain
+        N_pred = 50
+        pred_mu = np.empty((N_pred, len(t_)))
+        pred_var = np.empty((N_pred, len(t_)))
+        with model:
+            pred = gp.predict(t_, return_var=True)
+            for i, sample in enumerate(get_samples_from_trace(trace, size=N_pred)):
+                #point = {
+                #    str(model.vars[0]) : sample[0],
+                #    str(model.vars[1]) : sample[1],
+                #    str(model.vars[2]) : sample[2],
+                #    str(model.vars[3]) : sample[3],
+                #    str(model.vars[4]) : sample[4],
+                #    str(model.vars[5]) : sample[5],
+                #    str(model.vars[6]) : [sample[6], sample[7]]
+                #}
             
-        ax.grid(True)
-        plt.savefig(entry.path + '/model_GP.png')    
+                #point = {str(key): sample[i] for i, key in enumerate(model.vars[-2])} 
+                #point['teff_tE'] = [sample[6], sample[7]]
 
-        # Plot corner plot
-        plt.clf()
-        fig = corner.corner(samples_pymc3.reshape(-1, len(labels)), 
-            labels=labels)
-        fig.constrained_layout = True
-        plt.savefig(entry.path + '/corner_pymc3.png')
+                pred_mu[i], pred_var[i] = eval_in_model(pred, point=)
 
-        plt.clf()
-        fig = corner.corner(samples_emcee.reshape(-1, len(labels)),
-             labels=labels)
-        fig.constrained_layout = True
-        plt.savefig(entry.path + '/corner_emcee.png')
+        # Plot the predictions
+        fig, ax = plt.subplots(figsize=(25, 6))
+        for i in range(len(pred_mu)):
+            mu = pred_mu[i]
+            sd = np.sqrt(pred_var[i])
+            label = None if i else "prediction"
+            art = plt.fill_between(t_, mu+sd, mu-sd, color="C1", alpha=0.1)
+            art.set_edgecolor("none")
+            ax.plot(t_, mu, color="C1", label=label, alpha=0.1)
+            
+        plot_data(ax, t, F, sigF) # Plot data
+        plt.savefig(entry.path + '/PointSourcePointLensGP/' +\
+            'model.png')
 
-        plt.clf()
-        fig = corner.corner(samples_emcee_GP.reshape(-1, len(labels_GP)), 
-            labels=labels_GP)
-        fig.constrained_layout = True
-        plt.savefig(entry.path + '/corner_emcee_GP.png')
 
+#        # Set up a Celerite GP to plot GP model
+#        model_emcee_GP = PointSourcePointLensGP_emcee(t, F, sigF)
+#        quantiles_model_GP = np.percentile(samples_GP,
+#             [16, 50, 84], axis=0)
+#
+#        median_GP_params = quantiles_model_GP[1, :]
+#        gp = model_emcee_GP.gp
+#
+#        gp.set_parameter_vector(np.delete(median_GP_params, 2))
+#
+#        ln_K = median_GP_params[2]
+#        K = 1 + np.exp(ln_K)
+#
+#        gp.compute(t, K*sigF)
+#        mu = gp.predict(F, t_, return_cov=False)
+#        residuals_GP = F - gp.predict(F, t, return_cov=False)
+#
+#        plt.clf()
+#        fig, ax = plot_data_and_median_model(t, F, sigF, mu,
+#            residuals_GP, 'GP model')
+#        plt.savefig(entry.path + '/PointSourcePointLensGP' + '/model_GP_median.png')    
+#
+#
+#        # Plot a Quantile-Quantile plot (QQ plot) for non-GP model
+#        plt.clf()
+#        fig, ax = plt.subplots(figsize=(6,6))
+#        qq_plot(ax, residuals)
+#        plt.savefig(entry.path + '/PointSourcePointLens' + '/QQ_plot.png')    
+#        
+#
+#        # Plot samples from posterior in data space for GP model
+#        plt.clf()
+#        fig, ax = plt.subplots(figsize=(15, 6))
+#        plot_data(ax, t, F, sigF) # Plot data
+#
+#        for s in samples_GP[np.random.randint(len(samples_GP), 
+#                size=50)]:
+#            gp.set_parameter_vector(np.delete(s, 2))
+#            gp.compute(t, s[2]*sigF)
+#            mu = gp.predict(F, t_, return_cov=False)
+#            ax.plot(t_, mu, color='C1', alpha=0.3)
+#            
+#        ax.grid(True)
+#        plt.savefig(entry.path + '/PointSourcePointLensGP' + '/model_GP.png')    
+#
+#        # Plot corner plot
+#        plt.clf()
+#        fig = corner.corner(samples.reshape(-1, len(labels)), 
+#            labels=labels)
+#        fig.constrained_layout = True
+#        plt.savefig(entry.path + '/PointSourcePointLens' + '/corner.png')
+#
+#        plt.clf()
+#        fig = corner.corner(samples_emcee_GP.reshape(-1, len(labels_GP)), 
+#            labels=labels_GP)
+#        fig.constrained_layout = True
+#        plt.savefig(entry.path + '/PointSourcePointLensGP' + '/corner.png')
+#
         # Violin plot for important parameters
         ## Seaborn requires that both arrays with posterior samples have the
         ## same dimension
-        n = len(samples_GP[:, -2]) - len(samples_pymc3[:, -2])
-        print(len(samples_pymc3[:, -2]))
-        print(len(samples_GP[n:, -2]))
-        df = pd.DataFrame(data=np.stack((samples_pymc3[:, -2], 
-            samples_GP[n:, -2]), axis=1), columns=["no GP", "GP"])
+        #n = len(samples_GP[:, -2]) - len(samples[:, -2])
+        #print(len(samples[:, -2]))
+        #print(len(samples_GP[n:, -2]))
+        #df = pd.DataFrame(data=np.stack((samples[:, -2], 
+            #samples_GP[n:, -2]), axis=1), columns=["no GP", "GP"])
         
-        plt.clf()
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax = sns.violinplot(data=df)
-        ax.set_xlabel('Model')
-        ax.set_ylabel(r'$t_E$ [days]')
-        ax.grid(True)
+        #plt.clf()
+        #fig, ax = plt.subplots(figsize=(8, 6))
+        #ax = sns.violinplot(data=df)
+        #ax.set_xlabel('Model')
+        #ax.set_ylabel(r'$t_E$ [days]')
+        #ax.grid(True)
 
-        plt.savefig(entry.path  + '/tE_posterior.png')
+        #plt.savefig(entry.path  + '/tE_posterior.png')
