@@ -109,4 +109,4 @@ def initialize_model(t, F, sigF):
         for RV in model.basic_RVs:
             print(RV.name, RV.logp(model.test_point))
 
-    return model, gp
+        return model, gp
