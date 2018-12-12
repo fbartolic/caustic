@@ -82,6 +82,7 @@ for entry in os.scandir('output'):
 #
         # Set up GP model
         model, gp = initialize_model(t, F, sigF)
+        print(len(model.vars))
         with model:
             trace = pm.load_trace(entry.path + '/PointSourcePointLensGP/' +\
             'samples.trace') 
@@ -108,7 +109,7 @@ for entry in os.scandir('output'):
                 #point = {str(key): sample[i] for i, key in enumerate(model.vars[-2])} 
                 #point['teff_tE'] = [sample[6], sample[7]]
 
-                pred_mu[i], pred_var[i] = eval_in_model(pred, point=)
+                pred_mu[i], pred_var[i] = eval_in_model(pred, point=sample)
 
         # Plot the predictions
         fig, ax = plt.subplots(figsize=(25, 6))

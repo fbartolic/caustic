@@ -95,7 +95,7 @@ def initialize_model(t, F, sigF):
 
             return DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
 
-        mean = pm.Deterministic("flux", mean_function(t))
+        #mean = pm.Deterministic("flux", mean_function(t))
         
         kernel = terms.Matern32Term(log_sigma=ln_sigma, log_rho=ln_rho)
         # The exoplanet.gp.GP constructor takes an optional argument J which 
@@ -104,9 +104,7 @@ def initialize_model(t, F, sigF):
         gp = GP(kernel, t, (K*sigF)**2, J=2) # J=2 for Matern32 kernel
 
         # Add a custom "potential" (log probability function) with the GP likelihood
-        pm.Potential("gp", gp.log_likelihood(F - mean))
-        pm.Deterministic("gp_pred", gp.predict())
-
+        pm.Potential("gp", gp.log_likelihood(F - mean_function(t)))
 
         for RV in model.basic_RVs:
             print(RV.name, RV.logp(model.test_point))

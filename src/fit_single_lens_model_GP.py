@@ -27,7 +27,7 @@ lightcurves = [] # data for each event
  
 i = 0
 n_events = 5
-data_path = '/home/star/fb90/data/OGLE_ews/2017'
+data_path = '/home/fran/data/OGLE_ews/2017'
 for entry in sorted(os.listdir(data_path)):
     if (i < n_events):
         events.append(entry)
@@ -61,11 +61,11 @@ for event_index, lightcurve in enumerate(lightcurves):
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
 
     with model:
-        burnin = sampler.tune(tune=3000, start=start, 
+        burnin = sampler.tune(tune=1000, start=start, 
             step_kwargs=dict(target_accept=0.95))
             
     with model:
-        trace = sampler.sample(draws=2000)
+        trace = sampler.sample(draws=1000)
 
     # Save stats summary to file
     if not os.path.exists('output/' + events[event_index]):
@@ -86,18 +86,16 @@ for event_index, lightcurve in enumerate(lightcurves):
     np.save('output/' + events[event_index] + '/PointSourcePointLensGP'  +\
         '/samples_pymc3.npy', samples_pymc3)
 
+
     # Save traceplots
     fig, ax = plt.subplots(8, 2 ,figsize=(20, 30))
     _ = pm.traceplot(trace, ax=ax)
     plt.savefig('output/' + events[event_index] + '/PointSourcePointLensGP' +\
          '/traceplots_celerite_pymc3.png')
 
-    pm.save_trace(trace, 'output/' + events[event_index] +\
-         '/PointSourcePointLensGP' + '/samples.trace') 
-
     # Plot model in data space
     plt.clf()
-    t_ = np.linspace(t[0], t[-1], 5000)
+    t_ = np.linspace(t[0], t[-1], 1000)
 
     # Generate 50 realizations of the prediction sampling randomly from the chain
     N_pred = 50
@@ -108,7 +106,11 @@ for event_index, lightcurve in enumerate(lightcurves):
         pred = gp.predict(t_, return_var=True)
         for i, sample in enumerate(get_samples_from_trace(trace, size=N_pred)):
             pred_mu[i], pred_var[i] = eval_in_model(pred, sample)
-            mean_function[i] = eval_in_model(mean, sample)
+            u = T.sqrt(u0**2 + ((t_ - t0)/tE)**2)
+            A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+            mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
+
+            mean_function[i] = eval_in_model(mean_func, sample)
 
     # Plot the predictions
     fig, ax = plt.subplots(figsize=(25, 6))
@@ -123,6 +125,9 @@ for event_index, lightcurve in enumerate(lightcurves):
     plot_data(ax, t, F, sigF) # Plot data
     plt.savefig('output/' + events[event_index] + '/PointSourcePointLensGP/' +\
         'model.png')
+    
+
+    print(len(samples_pymc3.values[0, :]))
 
     # display the total number and percentage of divergent
     plt.clf()
