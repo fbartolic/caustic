@@ -50,7 +50,7 @@ def process_data(time, mag, mag_std, standardize=True, mag_zeropoint=22):
     if standardize==True:
         # Subtract the median from the data such that baseline is at approx 
         # zero, rescale the data such that it has unit variance
-        F_r = (F - np.median(F))/np.std(F)
+        F_r = (F - np.mean(F))/np.std(F)
         sig_F_r = sig_F/np.std(F)
         return time, F_r, sig_F_r
     else:
