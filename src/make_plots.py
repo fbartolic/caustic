@@ -6,6 +6,7 @@ import os
 import sys
 sys.path.append("../../exoplanet")
 sys.path.append("codebase")
+sys.path.append("models")
 
 import pymc3 as pm
 import theano
@@ -18,7 +19,7 @@ from exoplanet.utils import eval_in_model
 
 from data_preprocessing_ogle import process_data
 from plotting_utils import *
-from SingleLensModelMatern32 import initialize_model
+from SingleLensModels import PointSourcePointLensMatern32
 
 
 mpl.rc('font',**{'family':'serif','serif':['Palatino']})
@@ -52,7 +53,7 @@ for entry in os.scandir('output'):
         t, F, sigF = data[:, 0], data[:, 1], data[:, 2]
         
         # Load posterior samples
-        samples = np.load(entry.path + '/PointSourcePointLens' + '/samples_pymc3.npy')
+        #samples = np.load(entry.path + '/PointSourcePointLens' + '/samples_pymc3.npy')
         samples_GP = np.load(entry.path + '/PointSourcePointLensGP' +\
             '/samples_pymc3.npy')
         
@@ -62,7 +63,7 @@ for entry in os.scandir('output'):
             '$F_b$', '$t_0$', '$t_{eff}$', '$t_E$']
 
         # Plot median models
-        quantiles = np.percentile(samples, [16, 50, 84], axis=0)
+        #quantiles = np.percentile(samples, [16, 50, 84], axis=0)
         quantiles_GP = np.percentile(samples_GP, 
             [16, 50, 84], axis=0)
 
@@ -81,11 +82,11 @@ for entry in os.scandir('output'):
 #        plt.savefig(entry.path + '/PointSourcePointLens' + '/model.png')    
 #
         # Set up GP model
-        model, gp = initialize_model(t, F, sigF)
+        model = PointSourcePointLensMatern32(t, F, sigF)
         print(len(model.vars))
-        with model:
+        with model as model_matern32:
             trace = pm.load_trace(entry.path + '/PointSourcePointLensGP/' +\
-            'samples.trace') 
+            'model.trace') 
 
         t_ = np.linspace(t[0], t[-1], 5000)
 
@@ -93,23 +94,22 @@ for entry in os.scandir('output'):
         N_pred = 50
         pred_mu = np.empty((N_pred, len(t_)))
         pred_var = np.empty((N_pred, len(t_)))
-        with model:
-            pred = gp.predict(t_, return_var=True)
-            for i, sample in enumerate(get_samples_from_trace(trace, size=N_pred)):
-                #point = {
-                #    str(model.vars[0]) : sample[0],
-                #    str(model.vars[1]) : sample[1],
-                #    str(model.vars[2]) : sample[2],
-                #    str(model.vars[3]) : sample[3],
-                #    str(model.vars[4]) : sample[4],
-                #    str(model.vars[5]) : sample[5],
-                #    str(model.vars[6]) : [sample[6], sample[7]]
-                #}
-            
-                #point = {str(key): sample[i] for i, key in enumerate(model.vars[-2])} 
-                #point['teff_tE'] = [sample[6], sample[7]]
+        mean_function = np.empty((N_pred, len(t_)))
 
-                pred_mu[i], pred_var[i] = eval_in_model(pred, point=sample)
+        with model_matern32:
+            pred = model_matern32.gp.predict(t_, return_var=True)
+            for i, sample in enumerate(xo.get_samples_from_trace(trace, size=N_pred)):
+                Fb = model_matern32.Fb
+                u0 = model_matern32['u0']
+                t0 = model_matern32['t0']
+                DeltaF = model_matern32['DeltaF']
+                tE = model_matern32['teff_tE'][1]
+                u = T.sqrt(u0**2 + ((t_ - t0)/tE)**2)
+                A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+                mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
+
+                pred_mu[i], pred_var[i] = xo.eval_in_model(pred, sample)
+                mean_function[i] = xo.eval_in_model(mean_func, sample)
 
         # Plot the predictions
         fig, ax = plt.subplots(figsize=(25, 6))
@@ -117,11 +117,12 @@ for entry in os.scandir('output'):
             mu = pred_mu[i]
             sd = np.sqrt(pred_var[i])
             label = None if i else "prediction"
-            art = plt.fill_between(t_, mu+sd, mu-sd, color="C1", alpha=0.1)
-            art.set_edgecolor("none")
-            ax.plot(t_, mu, color="C1", label=label, alpha=0.1)
+            #art = plt.fill_between(t_, mu+sd, mu-sd, color="C1", alpha=0.1)
+            #art.set_edgecolor("none")
+            ax.plot(t_, mean_function[i] - mu, color="C1", label=label, alpha=0.1)
             
         plot_data(ax, t, F, sigF) # Plot data
+
         plt.savefig(entry.path + '/PointSourcePointLensGP/' +\
             'model.png')
 
