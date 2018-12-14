@@ -95,7 +95,7 @@ for event_index, lightcurve in enumerate(lightcurves):
             step_kwargs=dict(target_accept=0.95))
             
     with model_matern32:
-        trace_GP = sampler.sample(draws=2000)
+        trace_gp = sampler.sample(draws=2000)
 
     # Save output stats to file
     output_dir_standard = 'output/' + events[event_index] + '/PointSourcePointLens'
@@ -116,7 +116,7 @@ for event_index, lightcurve in enumerate(lightcurves):
     # Save posterior samples
     pm.save_trace(trace_standard, output_dir_standard + '/model.trace', 
         overwrite=True)
-    pm.save_trace(trace, output_dir_gp + '/model.trace', overwrite=True)
+    pm.save_trace(trace_gp, output_dir_gp + '/model.trace', overwrite=True)
 
     # Save traceplots
 
