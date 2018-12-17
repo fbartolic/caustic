@@ -53,10 +53,6 @@ for entry in os.scandir('output'):
         t, F, sigF = data[:, 0], data[:, 1], data[:, 2]
         
         # Load posterior samples
-        #samples = np.load(entry.path + '/PointSourcePointLens' + '/samples_pymc3.npy')
-        samples_GP = np.load(entry.path + '/PointSourcePointLensGP' +\
-            '/samples_pymc3.npy')
-        
         labels = ['$\Delta F$', '$F_b$', '$ln_K$', '$t_0$', '$t_{eff}$', 
             '$t_E$', '$ln_K$']
         labels_GP = ['$\ln\sigma$', 'ln_rho', 'ln_K', '$\Delta F$', 
@@ -64,8 +60,8 @@ for entry in os.scandir('output'):
 
         # Plot median models
         #quantiles = np.percentile(samples, [16, 50, 84], axis=0)
-        quantiles_GP = np.percentile(samples_GP, 
-            [16, 50, 84], axis=0)
+        #quantiles_GP = np.percentile(samples_GP, 
+            #[16, 50, 84], axis=0)
 
         t_ = np.linspace(t[0], t[-1], 1000)
 
@@ -114,12 +110,12 @@ for entry in os.scandir('output'):
         # Plot the predictions
         fig, ax = plt.subplots(figsize=(25, 6))
         for i in range(len(pred_mu)):
-            mu = pred_mu[i]
+            mu = mean_function[i] - pred_mu[i]
             sd = np.sqrt(pred_var[i])
             label = None if i else "prediction"
-            #art = plt.fill_between(t_, mu+sd, mu-sd, color="C1", alpha=0.1)
-            #art.set_edgecolor("none")
-            ax.plot(t_, mean_function[i] - mu, color="C1", label=label, alpha=0.1)
+            art = plt.fill_between(t_, mu+sd, mu-sd, color="C1", alpha=0.1)
+            art.set_edgecolor("none")
+            #ax.plot(t_, mean_function[i] - mu, color="C1", label=label, alpha=0.1)
             
         plot_data(ax, t, F, sigF) # Plot data
 

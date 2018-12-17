@@ -17,16 +17,16 @@ from exoplanet.gp import terms, GP
 
 from data_preprocessing_ogle import process_data
 from plotting_utils import *
-from SingleLensModels import PointSourcePointLens
-from SingleLensModels import PointSourcePointLensMatern32
+from SingleLensModels import ZeroMeanMatern32
 
 mpl.rc('text', usetex=False)
 
 events = [] # event names
 lightcurves = [] # data for each event
+limits = [1700, 1900, 1900, 1700, 2500]
  
 i = 0
-n_events = 100
+n_events = 5
 data_path = '/home/star/fb90/data/OGLE_ews/2017'
 for entry in sorted(os.listdir(data_path)):
     if (i < n_events):
@@ -45,48 +45,26 @@ for event_index, lightcurve in enumerate(lightcurves):
     t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
         lightcurve[:, 2], standardize=True)
 
+    t = t[:limits[event_index]]
+    F = F[:limits[event_index]]
+    sigF = sigF[:limits[event_index]]
+
     # Save processed data
     if not os.path.exists('output/' + events[event_index]):
         os.makedirs('output/' + events[event_index])
     
     data = np.stack((t, F, sigF), axis=1)
-    np.save('output/' + events[event_index] + '/data.npy', data)
+    np.save('output/' + events[event_index] + '/data_zero_mean.npy', data)
 
-    # Fit a non GP and a GP model
-    model1 = PointSourcePointLensMatern32(t, F, sigF)
-    model2 = PointSourcePointLens(t, F, sigF)
-
-    # Sample prior predictive distribution
-    #t_ = np.linspace(t[0], t[-1], 1000)
-    #with model as model_matern32:
-    #    Fb = model_matern32['Fb']
-    #    u0 = model_matern32['u0']
-    #    t0 = model_matern32['t0']
-    #    DeltaF = model_matern32['DeltaF']
-    #    tE = model_matern32['teff_tE'][1]
-    #    u = T.sqrt(u0**2 + ((t_ - t0)/tE)**2)
-    #    A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-    #    mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
-    #    y = pm.distributions.distribution.draw_values([mean_func], size=1)[0]
+    # Fit a GP model
+    model = ZeroMeanMatern32(t, F, sigF)
 
     # Sample models with NUTS
-    start_GP = {'sigma':0.5, 'rho':np.exp(2.), 'teff_tE':[35., 55.]}
+    start_GP = {'sigma':0.5, 'rho':np.exp(2.)}
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
 
-    # Sample non-GP model
-    with model2 as model_standard:
-        for RV in model_standard.basic_RVs:
-            print(RV.name, RV.logp(model_standard.test_point))
-
-    with model_standard:
-        burnin = sampler.tune(tune=3000, 
-            step_kwargs=dict(target_accept=0.95))
-            
-    with model_standard:
-        trace_standard = sampler.sample(draws=2000)
-
     # Sample GP model
-    with model1 as model_matern32:
+    with model as model_matern32:
         for RV in model_matern32.basic_RVs:
             print(RV.name, RV.logp(model_matern32.test_point))
 
@@ -98,10 +76,7 @@ for event_index, lightcurve in enumerate(lightcurves):
         trace_gp = sampler.sample(draws=2000)
 
     # Save output stats to file
-    output_dir_standard = 'output/' + events[event_index] + '/PointSourcePointLens'
-    output_dir_gp = 'output/' + events[event_index] + '/PointSourcePointLensGP'
-    if not os.path.exists(output_dir_standard):
-        os.makedirs(output_dir_standard)
+    output_dir_gp = 'output/' + events[event_index] + '/ZeroMeanMatern32'
     if not os.path.exists(output_dir_gp):
         os.makedirs(output_dir_gp)
 
@@ -110,23 +85,18 @@ for event_index, lightcurve in enumerate(lightcurves):
         df = df.round(2)
         df.to_csv(output_dir + '/sampling_stats.csv')
 
-    save_summary_stats(trace_standard, output_dir_standard)
     save_summary_stats(trace_gp, output_dir_gp)
 
     # Save posterior samples
-    pm.save_trace(trace_standard, output_dir_standard + '/model.trace', 
-        overwrite=True)
     pm.save_trace(trace_gp, output_dir_gp + '/model.trace', overwrite=True)
 
     # Save traceplots
-
     def save_traceplots(trace, n_pars, output_dir):
         fig, ax = plt.subplots(n_pars, 2 ,figsize=(20, 30))
         _ = pm.traceplot(trace, ax=ax)
         plt.savefig(output_dir + '/traceplots.png')
 
-    save_traceplots(trace_standard, 6, output_dir_standard)
-    save_traceplots(trace_gp, 10, output_dir_gp)
+    save_traceplots(trace_gp, 5, output_dir_gp)
 
     # Display the total number and percentage of divergent
     def save_divergences_stats(trace, output_dir):
@@ -137,7 +107,6 @@ for event_index, lightcurve in enumerate(lightcurves):
             divperc = divergent.nonzero()[0].size / len(trace) * 100
             print(f'Percentage of Divergent %.1f' % divperc, file=text_file)
 
-    save_divergences_stats(trace_standard, output_dir_standard)
     save_divergences_stats(trace_gp, output_dir_gp)
 
     #pm.pairplot(trace,
