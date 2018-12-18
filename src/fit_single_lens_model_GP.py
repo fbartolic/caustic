@@ -15,42 +15,42 @@ from theano.ifelse import ifelse
 import exoplanet as xo
 from exoplanet.gp import terms, GP
 
-from data_preprocessing_ogle import process_data
-from plotting_utils import *
+from Data import OGLEData
 from SingleLensModels import PointSourcePointLens
 from SingleLensModels import PointSourcePointLensMatern32
 
 mpl.rc('text', usetex=False)
 
-events = [] # event names
-lightcurves = [] # data for each event
+events = [] # data for each event
  
 i = 0
 n_events = 100
-data_path = '/home/star/fb90/data/OGLE_ews/2017'
+data_path = '/home/star/fb90/data/OGLE_ews/2017/'
 for entry in sorted(os.listdir(data_path)):
     if (i < n_events):
-        events.append(entry)
-        print(entry)
-        photometry = np.genfromtxt(data_path + '/' + entry + '/phot.dat', usecols=(0,1,2))
-        lightcurves.append(photometry)
+        event = OGLEData(data_path + entry)
+        events.append(event)
         i = i + 1
-        
-print("Loaded events:", events)
 
 np.random.seed(42)
 
-for event_index, lightcurve in enumerate(lightcurves):
+for event in events: 
+    print("Fitting models for event ", event.event_name)
+
     # Pre process the data
-    t, F, sigF = process_data(lightcurve[:, 0], lightcurve[:, 1], 
-        lightcurve[:, 2], standardize=True)
+    event.convert_data_to_fluxes()
+    df = event.get_standardized_data()
+
+    t = df['HJD - 2450000'].values
+    F = df['I_flux'].values
+    sigF = df['I_flux_err'].values
 
     # Save processed data
-    if not os.path.exists('output/' + events[event_index]):
-        os.makedirs('output/' + events[event_index])
+    if not os.path.exists('output/' + event.event_name):
+        os.makedirs('output/' + event.event_name)
     
     data = np.stack((t, F, sigF), axis=1)
-    np.save('output/' + events[event_index] + '/data.npy', data)
+    np.save('output/' + event.event_name + '/data.npy', data)
 
     # Fit a non GP and a GP model
     model1 = PointSourcePointLensMatern32(t, F, sigF)
@@ -98,8 +98,8 @@ for event_index, lightcurve in enumerate(lightcurves):
         trace_gp = sampler.sample(draws=2000)
 
     # Save output stats to file
-    output_dir_standard = 'output/' + events[event_index] + '/PointSourcePointLens'
-    output_dir_gp = 'output/' + events[event_index] + '/PointSourcePointLensGP'
+    output_dir_standard = 'output/' + event.event_name + '/PointSourcePointLens'
+    output_dir_gp = 'output/' + event.event_name + '/PointSourcePointLensGP'
     if not os.path.exists(output_dir_standard):
         os.makedirs(output_dir_standard)
     if not os.path.exists(output_dir_gp):
@@ -119,7 +119,6 @@ for event_index, lightcurve in enumerate(lightcurves):
     pm.save_trace(trace_gp, output_dir_gp + '/model.trace', overwrite=True)
 
     # Save traceplots
-
     def save_traceplots(trace, n_pars, output_dir):
         fig, ax = plt.subplots(n_pars, 2 ,figsize=(20, 30))
         _ = pm.traceplot(trace, ax=ax)
@@ -144,5 +143,5 @@ for event_index, lightcurve in enumerate(lightcurves):
     #        sub_varnames=['ln_sigma','ln_rho'],
     #        divergences=True,
     #        color='C3', figsize=(10, 5), kwargs_divergence={'color':'C2'})
-    #plt.savefig('output/' + events[event_index] + '/PointSourcePointLensGP' +\
-    #     '/divergences.png')
+    #plt.savefig('output/' + event.event_name + '/PointSourcePointLensGP' +\
+    #     '/divergences.png')x]dis[.am

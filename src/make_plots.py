@@ -110,7 +110,7 @@ for entry in os.scandir('output'):
         # Plot the predictions
         fig, ax = plt.subplots(figsize=(25, 6))
         for i in range(len(pred_mu)):
-            mu = mean_function[i] - pred_mu[i]
+            mu = mean_function[i] + pred_mu[i]
             sd = np.sqrt(pred_var[i])
             label = None if i else "prediction"
             art = plt.fill_between(t_, mu+sd, mu-sd, color="C1", alpha=0.1)

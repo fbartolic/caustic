@@ -3,19 +3,22 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from io import StringIO
+import re
 
 fig, ax = plt.subplots(figsize=(20, 5))
 
-with open('../../../../data/ROME_REA/' + 'lc_00299.583_00302.981_t') as f:
+event_dir ='../../../../data/MOA/' + 'phot-gb1-R-7-4500.dat'
+
+with open(event_dir) as f:
     contents = f.readlines()
     processed = ''
     for i in range(len(contents)):
-        processed += '\n' + contents[i][164:] 
+        processed += re.sub("\s+", ",", contents[i].strip()) + '\n' 
     processed = StringIO(processed)
-    df = pd.read_csv(processed, sep=' ',  usecols=(3, 15, 16), 
-            names=['HJD - 2450000', 'I_mag', 'I_mag_err'])
+    df = pd.read_csv(processed, sep=',', header=None, skiprows=10)
     print(df.head())
 
-ax.plot(df['HJD - 2450000'].values, df['I_mag'].values, 'k.')
+print(np.argmin(df[0].values))
+
+ax.plot(df[0].values, df[1].values, 'k.')
 plt.show()
-    

@@ -18,9 +18,8 @@ class Data(object):
         self.units = 'magnitudes'
         self.observatory = ''
 
-    def __add__(self, b):
-        return DataSum(self, b)
-
+    def __add__(self, another_dataset):
+        """"""
     def __str__(self):
         return "Event name: {}\nRA: {}\nDec: {}\nFilters: {}".format(\
             self.event_name, self.RA, self.Dec, self.filters)
@@ -109,7 +108,7 @@ class Data(object):
 
         return mu_m, sig_m
 
-    def get_standardized_data(self, df):  
+    def get_standardized_data(self):  
         """
         If the lightcurve is expressed in flux units, this function standardizes
         the data to zero median and unit variance, a format which is suitable
@@ -122,8 +121,8 @@ class Data(object):
         # Subtract the median from the data such that baseline is at approx 
         # zero, rescale the data such that it has unit variance
         df = self.df.copy()
-        df['I_flux'] = (df['I_flux'] - df['I_flux'].median)/df['I_flux'].std
-        df['I_flux_err'] = df['I_flux_err']/df['I_flux'].std
+        df['I_flux'] = (df['I_flux'] - df['I_flux'].median())/df['I_flux'].std()
+        df['I_flux_err'] = df['I_flux_err']/df['I_flux'].std()
         return df
 
     def plot(self, ax):
@@ -152,12 +151,6 @@ class Data(object):
             ax.set_xlabel(self.df.columns[0])
             ax.set_ylabel(self.df.columns[1])
     
-class DataSum(Data):
-    """Implements  sumation operation between two datasets."""
-    def __init__(self, *datasets, **kwargs):
-        self.datasets = datasets
-        super(DataSum, self).__init__(**kwargs)
-
 class OGLEData(Data):
     """Subclass of data class for dealing with OGLE data."""
     def __init__(self, event_dir):
@@ -178,7 +171,25 @@ class OGLEData(Data):
         return df
 
 class MOAData(Data):
-    pass
+    """Subclass of data class for dealing with OGLE data."""
+    def __init__(self, event_path):
+        super(MOAData, self).__init__(event_path)
+        self.observatory = 'MOA'
+
+    def load_data(self, event_path):
+        """Returns dataframe with raw data."""
+        with open(event_path) as f:
+            lines = f.readlines() 
+            contents = f.readlines()
+            processed = ''
+            for i in range(len(contents)):
+                processed += re.sub("\s+", ",", contents[i].strip()) + '\n' 
+            processed = StringIO(processed)
+            df = pd.read_csv(processed, sep=',', header=None, skiprows=10)
+        return df
 
 class LCOData(Data):
+    pass
+
+class KMTData(Data):
     pass
