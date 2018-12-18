@@ -17,7 +17,7 @@ from scipy.optimize import fsolve
 
 class PointSourcePointLens(pm.Model):
     #  override __init__ function from pymc3 Model class
-    def __init__(self, t, F, sigF, name='', model=None):
+    def __init__(self, data, name='', model=None):
         # call super's init first, passing model and name
         # to it name will be prefix for all variables here if
         # no name specified for model there will be no prefix
@@ -27,23 +27,27 @@ class PointSourcePointLens(pm.Model):
         # variables in several ways note, that all variables
         # will get model's name prefix
 
+        # Pre process the data
+        data.convert_data_to_fluxes()
+        df = data.get_standardized_data()
+
         # Data
-        self.t = t
-        self.F = F
-        self.sigF = sigF
+        self.t = df['HJD - 2450000'].values
+        self.F = df['I_flux'].values
+        self.sigF = df['I_flux_err'].values
 
         # Custom prior distributions 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
         BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
 
         # Microlensing model parameters
-        self.DeltaF = BoundedNormal('DeltaF', mu=np.max(F), sd=1., testval=3.)
+        self.DeltaF = BoundedNormal('DeltaF', mu=np.max(self.F), sd=1., testval=3.)
         self.Fb = pm.Normal('Fb', mu=0., sd=0.1, testval=0.)
         # Posterior is multi-modal in t0 and it's critical that the it is 
         # initialized near the true value
-        t0_guess_idx = (np.abs(F - np.max(F))).argmin() 
+        t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
         self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
-            testval=t[t0_guess_idx])
+            testval=self.t[t0_guess_idx])
         self.teff_tE = pm.DensityDist('teff_tE', self.joint_density, shape=2, 
             testval = [35., 55.])
 
@@ -55,8 +59,8 @@ class PointSourcePointLens(pm.Model):
         # Noise model parameters
         self.K = BoundedNormal1('K', mu=1.001, sd=2., testval=1.5)
         
-        Y_obs = pm.Normal('Y_obs', mu=self.mean_function(), sd=self.K*sigF, 
-            observed=F)
+        Y_obs = pm.Normal('Y_obs', mu=self.mean_function(), sd=self.K*self.sigF, 
+            observed=self.F)
 
     def mean_function(self):
         """PSPL model"""
@@ -74,13 +78,17 @@ class PointSourcePointLens(pm.Model):
 
 
 class PointSourcePointLensMatern32(pm.Model):
-    def __init__(self, t, F, sigF, name='', model=None):
+    def __init__(self, data, name='', model=None):
         super(PointSourcePointLensMatern32, self).__init__(name, model)
 
+        # Pre process the data
+        data.convert_data_to_fluxes()
+        df = data.get_standardized_data()
+
         # Data
-        self.t = t
-        self.F = F
-        self.sigF = sigF
+        self.t = df['HJD - 2450000'].values
+        self.F = df['I_flux'].values
+        self.sigF = df['I_flux_err'].values
 
         # Custom prior distributions 
         # Compute parameters for the prior on GP hyperparameters
@@ -91,13 +99,13 @@ class PointSourcePointLensMatern32(pm.Model):
         BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
 
         # Microlensing model parameters
-        self.DeltaF = BoundedNormal('DeltaF', mu=np.max(F), sd=1., testval=3.)
+        self.DeltaF = BoundedNormal('DeltaF', mu=np.max(self.F), sd=1., testval=3.)
         self.Fb = pm.Normal('Fb', mu=0., sd=0.1, testval=0.)
         # Posterior is multi-modal in t0 and it's critical that t0 is 
         # initialized near the true value
-        t0_guess_idx = (np.abs(F - np.max(F))).argmin() 
+        t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
         self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
-            testval=t[t0_guess_idx])
+            testval=self.t[t0_guess_idx])
         self.teff_tE = pm.DensityDist('teff_tE', self.joint_density, shape=2, 
             testval = [35., 55.])
 
@@ -119,10 +127,10 @@ class PointSourcePointLensMatern32(pm.Model):
         # The exoplanet.gp.GP constructor takes an optional argument J which 
         # specifies the width of the problem if it is known at compile time. 
         # This is actually two times the J from the celerite paper
-        self.gp = GP(kernel, t, (self.K*sigF)**2, J=2) # J=2 for Matern32 kernel
+        self.gp = GP(kernel, self.t, (self.K*self.sigF)**2, J=2) # J=2 for Matern32 kernel
 
         # Add a custom "potential" (log probability function) with the GP likelihood
-        pm.Potential("gp", self.gp.log_likelihood(F - self.mean_function()))
+        pm.Potential("gp", self.gp.log_likelihood(self.F - self.mean_function()))
 
     def mean_function(self):
         """PSPL model"""
@@ -156,12 +164,17 @@ class PointSourcePointLensMatern32(pm.Model):
         lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
 
 class ZeroMeanMatern32(pm.Model):
-    def __init__(self, t, F, sigF, name='', model=None):
+    def __init__(self, data, name='', model=None):
         super(ZeroMeanMatern32, self).__init__(name, model)
+
+        # Pre process the data
+        data.convert_data_to_fluxes()
+        df = data.get_standardized_data()
+
         # Data
-        self.t = t
-        self.F = F
-        self.sigF = sigF
+        self.t = df['HJD - 2450000'].values
+        self.F = df['I_flux'].values
+        self.sigF = df['I_flux_err'].values
 
         # Custom prior distributions 
         # Compute parameters for the prior on GP hyperparameters
@@ -208,12 +221,13 @@ class ZeroMeanMatern32(pm.Model):
         lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
 
 class ZeroMeanMatern32StudentT(pm.Model):
-    def __init__(self, t, F, sigF, name='', model=None):
+    def __init__(self, data, name='', model=None):
         super(ZeroMeanMatern32StudentT, self).__init__(name, model)
+
         # Data
-        self.t = t
-        self.F = F
-        self.sigF = sigF
+        self.t = data.df['HJD - 2450000'].values
+        self.F = data.df['I_flux'].values
+        self.sigF = data.df['I_flux_err'].values
 
         # Custom prior distributions 
         # Compute parameters for the prior on GP hyperparameters

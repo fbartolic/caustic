@@ -25,7 +25,7 @@ events = [] # data for each event
  
 i = 0
 n_events = 100
-data_path = '/home/star/fb90/data/OGLE_ews/2017/'
+data_path = '/home/fran/data/OGLE_ews/2017/'
 for entry in sorted(os.listdir(data_path)):
     if (i < n_events):
         event = OGLEData(data_path + entry)
@@ -37,24 +37,9 @@ np.random.seed(42)
 for event in events: 
     print("Fitting models for event ", event.event_name)
 
-    # Pre process the data
-    event.convert_data_to_fluxes()
-    df = event.get_standardized_data()
-
-    t = df['HJD - 2450000'].values
-    F = df['I_flux'].values
-    sigF = df['I_flux_err'].values
-
-    # Save processed data
-    if not os.path.exists('output/' + event.event_name):
-        os.makedirs('output/' + event.event_name)
-    
-    data = np.stack((t, F, sigF), axis=1)
-    np.save('output/' + event.event_name + '/data.npy', data)
-
     # Fit a non GP and a GP model
-    model1 = PointSourcePointLensMatern32(t, F, sigF)
-    model2 = PointSourcePointLens(t, F, sigF)
+    model1 = PointSourcePointLensMatern32(event)
+    model2 = PointSourcePointLens(event)
 
     # Sample prior predictive distribution
     #t_ = np.linspace(t[0], t[-1], 1000)

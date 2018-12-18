@@ -17,8 +17,7 @@ from exoplanet.gp import terms, GP
 from exoplanet.utils import get_samples_from_trace
 from exoplanet.utils import eval_in_model
 
-from data_preprocessing_ogle import process_data
-from plotting_utils import *
+from Data import OGLEData
 from SingleLensModels import PointSourcePointLensMatern32
 
 
@@ -46,11 +45,13 @@ def qq_plot(ax, residuals):
     ax.set_xlabel("Modeled residuals")
     ax.set_ylabel("Measured residuals")
 
+
+data_path = '/home/fran/data/OGLE_ews/2017/'
+
 # Iterate over events, load data, and make plots 
 for entry in os.scandir('output'):
     if entry.is_dir():
-        data = np.load(entry.path + '/data.npy')
-        t, F, sigF = data[:, 0], data[:, 1], data[:, 2]
+        event = OGLEData(data_path + entry.name)
         
         # Load posterior samples
         labels = ['$\Delta F$', '$F_b$', '$ln_K$', '$t_0$', '$t_{eff}$', 
