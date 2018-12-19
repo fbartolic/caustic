@@ -40,7 +40,8 @@ class Data(object):
         """
 
         if not (self.units=='magnitudes'):
-            raise ValueError("Data is already in flux units.")
+            #raise ValueError("Data is already in flux units.")
+            return None
 
         F, F_err = self.magnitudes_to_fluxes(self.df['I_mag'], 
            self.df['I_mag_err'], zero_point=22.)
@@ -63,7 +64,8 @@ class Data(object):
         
         """
         if not (self.units=='fluxes'):
-            raise ValueError("Data is already in magnitude units.")
+            #raise ValueError("Data is already in magnitude units.")
+            return None
 
         """"Returns a df with the data in expressed in magnitudes rather than
         fluxes."""

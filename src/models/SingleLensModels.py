@@ -17,7 +17,7 @@ from scipy.optimize import fsolve
 
 class PointSourcePointLens(pm.Model):
     #  override __init__ function from pymc3 Model class
-    def __init__(self, data, name='', model=None):
+    def __init__(self, data, parametrization='standard', name='', model=None):
         # call super's init first, passing model and name
         # to it name will be prefix for all variables here if
         # no name specified for model there will be no prefix
@@ -48,19 +48,24 @@ class PointSourcePointLens(pm.Model):
         t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
         self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
             testval=self.t[t0_guess_idx])
-        self.teff_tE = pm.DensityDist('teff_tE', self.joint_density, shape=2, 
-            testval = [35., 55.])
+        if (parametrization=='standard'):
+            self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+            self.tE = BoundedNormal('tE', mu=0., sd=600., testval=20.)
+        else:
+            self.ln_teff_ln_tE = pm.DensityDist('ln_teff_ln_tE', 
+                self.joint_density, shape=2, 
+                testval = [np.log(10), np.log(20.)]) # p(ln_teff,ln_tE)
 
-        # Deterministic transformations
-        teff = self.teff_tE[0]
-        self.tE = self.teff_tE[1]
-        self.u0 = pm.Deterministic("u0", teff/self.tE) # u0=teff/tE
+            # Deterministic transformations
+            self.tE = pm.Deterministic("tE", T.exp(self.ln_teff_ln_tE[1]))
+            self.u0 = pm.Deterministic("u0", 
+                T.exp(self.ln_teff_ln_tE[0])/self.tE) 
 
         # Noise model parameters
-        self.K = BoundedNormal1('K', mu=1.001, sd=2., testval=1.5)
+        self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
         
         Y_obs = pm.Normal('Y_obs', mu=self.mean_function(), sd=self.K*self.sigF, 
-            observed=self.F)
+            observed=self.F, shape=len(self.F))
 
     def mean_function(self):
         """PSPL model"""
@@ -70,12 +75,13 @@ class PointSourcePointLens(pm.Model):
         return self.DeltaF*(A(u) - 1)/(A(self.u0) - 1) + self.Fb
 
     def joint_density(self, value):
-        teff = T.cast(value[0], 'float64')
-        tE = T.cast(value[1], 'float64')
-        sig_tE = T.cast(365., 'float64')
-        sig_u0 = T.cast(1., 'float64')
-        return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2
+        teff = T.cast(T.exp(value[0]), 'float64')
+        tE = T.cast(T.exp(value[1]), 'float64')
+        sig_tE = T.cast(600., 'float64') # p(tE)~N(0, 600)
+        sig_u0 = T.cast(1., 'float64') # p(u0)~N(0, 1)
 
+        return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
+            value[0] + value[1]
 
 class PointSourcePointLensMatern32(pm.Model):
     def __init__(self, data, name='', model=None):
