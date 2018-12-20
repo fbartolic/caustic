@@ -10,6 +10,9 @@ from theano.ifelse import ifelse
 
 import exoplanet as xo
 from exoplanet.gp import terms, GP
+from exoplanet.utils import get_samples_from_trace
+from exoplanet.utils import eval_in_model
+
 
 from scipy.special import gamma
 from scipy.stats import invgamma
@@ -84,7 +87,7 @@ class PointSourcePointLens(pm.Model):
             value[0] + value[1]
 
 class PointSourcePointLensMatern32(pm.Model):
-    def __init__(self, data, name='', model=None):
+    def __init__(self, data, parametrization, name='', model=None):
         super(PointSourcePointLensMatern32, self).__init__(name, model)
 
         # Pre process the data
@@ -107,18 +110,24 @@ class PointSourcePointLensMatern32(pm.Model):
         # Microlensing model parameters
         self.DeltaF = BoundedNormal('DeltaF', mu=np.max(self.F), sd=1., testval=3.)
         self.Fb = pm.Normal('Fb', mu=0., sd=0.1, testval=0.)
-        # Posterior is multi-modal in t0 and it's critical that t0 is 
+        # Posterior is multi-modal in t0 and it's critical that the it is 
         # initialized near the true value
         t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
         self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
             testval=self.t[t0_guess_idx])
-        self.teff_tE = pm.DensityDist('teff_tE', self.joint_density, shape=2, 
-            testval = [35., 55.])
 
-        # Deterministic transformations
-        teff = self.teff_tE[0]
-        self.tE = self.teff_tE[1]
-        self.u0 = pm.Deterministic("u0", teff/self.tE) # u0=teff/tE
+        if (parametrization=='standard'):
+            self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+            self.tE = BoundedNormal('tE', mu=0., sd=600., testval=20.)
+        else:
+            self.ln_teff_ln_tE = pm.DensityDist('ln_teff_ln_tE', 
+                self.joint_density, shape=2, 
+                testval = [np.log(10), np.log(20.)]) # p(ln_teff,ln_tE)
+
+            # Deterministic transformations
+            self.tE = pm.Deterministic("tE", T.exp(self.ln_teff_ln_tE[1]))
+            self.u0 = pm.Deterministic("u0", 
+                T.exp(self.ln_teff_ln_tE[0])/self.tE) 
 
         # Noise model parameters
         self.sigma = BoundedNormal('sigma', mu=0., sd=3., testval=0.5)
@@ -168,6 +177,33 @@ class PointSourcePointLensMatern32(pm.Model):
         # Equation for the roots defining params which satisfy the constraint
         return (inverse_gamma_cdf(x_min, alpha, beta) - \
         lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
+
+    def plot_model(self, ax, x, trace, output_dir):
+        """"""
+        # Generate 50 realizations of the prediction sampling randomly from the chain
+        N_pred = 50
+        pred_mu = np.empty((N_pred, len(x)))
+        pred_var = np.empty((N_pred, len(x)))
+        mean_function = np.empty((N_pred, len(x)))
+
+        pred = self.gp.predict(t_, return_var=True)
+        for i, sample in enumerate(xo.get_samples_from_trace(trace, size=N_pred)):
+            Fb = self.Fb
+            u0 = self.u0
+            t0 = self.t0
+            DeltaF = self.DeltaF
+            tE = self.tE
+            u = T.sqrt(u0**2 + ((x - t0)/tE)**2)
+            A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+            mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
+
+            pred_mu[i], pred_var[i] = xo.eval_in_model(pred, sample)
+            mean_function[i] = xo.eval_in_model(mean_func, sample)
+
+        # Plot the predictions
+        for i in range(len(pred_mu)):
+            mu = mean_function[i] + pred_mu[i]
+            ax.plot(x, mu, color='C1', alpha=0.2)
 
 class ZeroMeanMatern32(pm.Model):
     def __init__(self, data, name='', model=None):

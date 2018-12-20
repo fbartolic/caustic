@@ -7,6 +7,7 @@ import sys
 sys.path.append("../../exoplanet")
 sys.path.append("models")
 sys.path.append("codebase")
+print(sys.version)
 
 import pymc3 as pm
 import theano

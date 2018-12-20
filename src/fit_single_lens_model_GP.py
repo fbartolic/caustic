@@ -38,24 +38,10 @@ for event in events:
     print("Fitting models for event ", event.event_name)
 
     # Fit a non GP and a GP model
-    model1 = PointSourcePointLensMatern32(event)
-    model2 = PointSourcePointLens(event)
-
-    # Sample prior predictive distribution
-    #t_ = np.linspace(t[0], t[-1], 1000)
-    #with model as model_matern32:
-    #    Fb = model_matern32['Fb']
-    #    u0 = model_matern32['u0']
-    #    t0 = model_matern32['t0']
-    #    DeltaF = model_matern32['DeltaF']
-    #    tE = model_matern32['teff_tE'][1]
-    #    u = T.sqrt(u0**2 + ((t_ - t0)/tE)**2)
-    #    A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-    #    mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
-    #    y = pm.distributions.distribution.draw_values([mean_func], size=1)[0]
+    model1 = PointSourcePointLensMatern32(event, parametrization='other')
+    model2 = PointSourcePointLens(event, parametrization='other')
 
     # Sample models with NUTS
-    start_GP = {'sigma':0.5, 'rho':np.exp(2.)}
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
 
     # Sample non-GP model
@@ -71,24 +57,34 @@ for event in events:
         trace_standard = sampler.sample(draws=2000)
 
     # Sample GP model
-#    with model1 as model_matern32:
-#        for RV in model_matern32.basic_RVs:
-#            print(RV.name, RV.logp(model_matern32.test_point))
-#
-#    with model_matern32:
-#        burnin = sampler.tune(tune=3000, start=start_GP, 
-#            step_kwargs=dict(target_accept=0.95))
-#            
-#    with model_matern32:
-#        trace_gp = sampler.sample(draws=2000)
-#
+    with model1 as model_matern32:
+        for RV in model_matern32.basic_RVs:
+            print(RV.name, RV.logp(model_matern32.test_point))
+
+    # start at the mean posterior values of non-GP model
+    print(trace_standard['ln_teff_ln_tE'][0].mean())
+    start_GP = {
+        'DeltaF': trace_standard['DeltaF'].mean(),
+        'Fb': trace_standard['Fb'].mean(),
+        't0': trace_standard['t0'].mean(),
+        'ln_teff_ln_tE': [trace_standard['ln_teff_ln_tE'][0].mean(),
+            trace_standard['ln_teff_ln_tE'][1].mean()],
+        'K': trace_standard['K'].mean()
+    }
+    with model_matern32:
+        burnin = sampler.tune(tune=3000, start=start_GP, 
+            step_kwargs=dict(target_accept=0.95))
+            
+    with model_matern32:
+        trace_gp = sampler.sample(draws=2000)
+
     # Save output stats to file
     output_dir_standard = 'output/' + event.event_name + '/PointSourcePointLens'
-    #output_dir_gp = 'output/' + event.event_name + '/PointSourcePointLensGP'
+    output_dir_gp = 'output/' + event.event_name + '/PointSourcePointLensGP'
     if not os.path.exists(output_dir_standard):
         os.makedirs(output_dir_standard)
-    #if not os.path.exists(output_dir_gp):
-    #    os.makedirs(output_dir_gp)
+    if not os.path.exists(output_dir_gp):
+        os.makedirs(output_dir_gp)
 
     def save_summary_stats(trace, output_dir):
         df = pm.summary(trace) 
@@ -96,12 +92,12 @@ for event in events:
         df.to_csv(output_dir + '/sampling_stats.csv')
 
     save_summary_stats(trace_standard, output_dir_standard)
-    #save_summary_stats(trace_gp, output_dir_gp)
+    save_summary_stats(trace_gp, output_dir_gp)
 
     # Save posterior samples
     pm.save_trace(trace_standard, output_dir_standard + '/model.trace', 
         overwrite=True)
-    #pm.save_trace(trace_gp, output_dir_gp + '/model.trace', overwrite=True)
+    pm.save_trace(trace_gp, output_dir_gp + '/model.trace', overwrite=True)
 
     # Save traceplots
     def save_traceplots(trace, n_pars, output_dir):
@@ -110,7 +106,7 @@ for event in events:
         plt.savefig(output_dir + '/traceplots.png')
 
     save_traceplots(trace_standard, 7, output_dir_standard)
-    #save_traceplots(trace_gp, 10, output_dir_gp)
+    save_traceplots(trace_gp, 11, output_dir_gp)
 
     # Display the total number and percentage of divergent
     def save_divergences_stats(trace, output_dir):
@@ -122,9 +118,14 @@ for event in events:
             print(f'Percentage of Divergent %.1f' % divperc, file=text_file)
 
     save_divergences_stats(trace_standard, output_dir_standard)
-    #save_divergences_stats(trace_gp, output_dir_gp)
+    save_divergences_stats(trace_gp, output_dir_gp)
 
     pm.pairplot(trace_standard,
-            divergences=True, plot_transformed=True,
+            divergences=True, plot_transformed=True, text_size=11,
             color='C3', figsize=(40, 40), kwargs_divergence={'color':'C0'})
     plt.savefig(output_dir_standard + '/pairplot.png')
+
+    pm.pairplot(trace_gp,
+            divergences=True, plot_transformed=True, text_size=11,
+            color='C3', figsize=(40, 40), kwargs_divergence={'color':'C0'})
+    plt.savefig(output_dir_gp + '/pairplot.png')

@@ -46,13 +46,15 @@ def qq_plot(ax, residuals):
     ax.set_ylabel("Measured residuals")
 
 
-data_path = '/home/fran/data/OGLE_ews/2017/'
+data_path = '/home/star/fb90/data/OGLE_ews/2017/'
 
 # Iterate over events, load data, and make plots 
 for entry in os.scandir('output'):
     if entry.is_dir():
-        event = OGLEData(data_path + entry.name)
-        
+
+        data_dir =  data_path + 'blg-' + entry.name[-5:-1]
+        event = OGLEData(data_dir)
+
         # Load posterior samples
         labels = ['$\Delta F$', '$F_b$', '$ln_K$', '$t_0$', '$t_{eff}$', 
             '$t_E$', '$ln_K$']
@@ -63,10 +65,8 @@ for entry in os.scandir('output'):
         #quantiles = np.percentile(samples, [16, 50, 84], axis=0)
         #quantiles_GP = np.percentile(samples_GP, 
             #[16, 50, 84], axis=0)
-
-        t_ = np.linspace(t[0], t[-1], 1000)
-
-        plt.clf()
+        t_ = np.linspace(event.df['HJD - 2450000'].values[0], 
+                    event.df['HJD - 2450000'].values[-1], 2000)
 
         ## Calculate residuals
 #        model_emcee = PointSourcePointLens_emcee(t, F, sigF)
@@ -79,13 +79,12 @@ for entry in os.scandir('output'):
 #        plt.savefig(entry.path + '/PointSourcePointLens' + '/model.png')    
 #
         # Set up GP model
-        model = PointSourcePointLensMatern32(event)
-        print(len(model.vars))
+        samples_dir = 'output/' + entry.name + '/PointSourcePointLensGP/' 
+        print(repr(samples_dir + 'model.trace'))
+        model = PointSourcePointLensMatern32(event, parametrization='other')
         with model as model_matern32:
-            trace = pm.load_trace(data_path + entry.name + '/PointSourcePointLensGP/' +\
-            'model.trace') 
-
-        t_ = np.linspace(t[0], t[-1], 5000)
+            trace = pm.load_trace(samples_dir + 'model.trace') 
+            print(pm.summary(trace))
 
         # Generate 50 realizations of the prediction sampling randomly from the chain
         N_pred = 50
@@ -97,10 +96,10 @@ for entry in os.scandir('output'):
             pred = model_matern32.gp.predict(t_, return_var=True)
             for i, sample in enumerate(xo.get_samples_from_trace(trace, size=N_pred)):
                 Fb = model_matern32.Fb
-                u0 = model_matern32['u0']
-                t0 = model_matern32['t0']
-                DeltaF = model_matern32['DeltaF']
-                tE = model_matern32['teff_tE'][1]
+                u0 = model_matern32.u0
+                t0 = model_matern32.t0
+                DeltaF = model_matern32.DeltaF
+                tE = model_matern32.tE
                 u = T.sqrt(u0**2 + ((t_ - t0)/tE)**2)
                 A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
                 mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
@@ -112,41 +111,47 @@ for entry in os.scandir('output'):
         fig, ax = plt.subplots(figsize=(25, 6))
         for i in range(len(pred_mu)):
             mu = mean_function[i] + pred_mu[i]
-            sd = np.sqrt(pred_var[i])
-            label = None if i else "prediction"
-            art = plt.fill_between(t_, mu+sd, mu-sd, color="C1", alpha=0.1)
-            art.set_edgecolor("none")
-            #ax.plot(t_, mean_function[i] - mu, color="C1", label=label, alpha=0.1)
-            
-        plot_data(ax, t, F, sigF) # Plot data
+            ax.plot(t_, mu, color='C1', alpha=0.2)
 
-        plt.savefig(entry.path + '/PointSourcePointLensGP/' +\
-            'model.png')
+        event.plot_standardized_data(ax)
+
+        plt.savefig(samples_dir + 'model.png')
+
+        # Plot detail
+        t_ = np.linspace(event.df['HJD - 2450000'].values[0], 
+                    event.df['HJD - 2450000'].values[800], 5000)
+
+        plt.clf()
+        with model_matern32:
+            pred2 = model_matern32.gp.predict(t_, return_var=True)
+            for i, sample in enumerate(xo.get_samples_from_trace(trace, size=N_pred)):
+                Fb = model_matern32.Fb
+                u0 = model_matern32.u0
+                t0 = model_matern32.t0
+                DeltaF = model_matern32.DeltaF
+                tE = model_matern32.tE
+                u = T.sqrt(u0**2 + ((t_ - t0)/tE)**2)
+                A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+                mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
+
+                pred_mu[i], pred_var[i] = xo.eval_in_model(pred2, sample)
+                mean_function[i] = xo.eval_in_model(mean_func, sample)
+
+        # Plot the predictions
+        event.plot_standardized_data(ax)
+        fig, ax = plt.subplots(figsize=(25, 6))
+        for i in range(len(pred_mu)):
+            mu = mean_function[i] + pred_mu[i]
+            ax.plot(t_, mu, color='C1', alpha=0.2)
+
+        ax.set_xlim(event.df['HJD - 2450000'].values[0],
+            event.df['HJD - 2450000'].values[800])
+
+        plt.savefig(samples_dir + 'model_detail.png')
 
 
-#        # Set up a Celerite GP to plot GP model
-#        model_emcee_GP = PointSourcePointLensGP_emcee(t, F, sigF)
-#        quantiles_model_GP = np.percentile(samples_GP,
-#             [16, 50, 84], axis=0)
-#
-#        median_GP_params = quantiles_model_GP[1, :]
-#        gp = model_emcee_GP.gp
-#
-#        gp.set_parameter_vector(np.delete(median_GP_params, 2))
-#
-#        ln_K = median_GP_params[2]
-#        K = 1 + np.exp(ln_K)
-#
-#        gp.compute(t, K*sigF)
-#        mu = gp.predict(F, t_, return_cov=False)
-#        residuals_GP = F - gp.predict(F, t, return_cov=False)
-#
-#        plt.clf()
-#        fig, ax = plot_data_and_median_model(t, F, sigF, mu,
-#            residuals_GP, 'GP model')
-#        plt.savefig(entry.path + '/PointSourcePointLensGP' + '/model_GP_median.png')    
-#
-#
+
+
 #        # Plot a Quantile-Quantile plot (QQ plot) for non-GP model
 #        plt.clf()
 #        fig, ax = plt.subplots(figsize=(6,6))

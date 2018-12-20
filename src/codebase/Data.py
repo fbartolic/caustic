@@ -117,15 +117,15 @@ class Data(object):
         for modeling.
         """
         if not (self.units=='fluxes'):
-            raise ValueError("Make sure that the units are fluxes instead of \
-                magnitudes.")
+            self.convert_data_to_fluxes()
 
         # Subtract the median from the data such that baseline is at approx 
         # zero, rescale the data such that it has unit variance
-        df = self.df.copy()
-        df['I_flux'] = (df['I_flux'] - df['I_flux'].median())/df['I_flux'].std()
-        df['I_flux_err'] = df['I_flux_err']/df['I_flux'].std()
-        return df
+        df_std = self.df.copy()
+        df_std['I_flux'] = (self.df['I_flux'] -\
+             self.df['I_flux'].median())/np.std(self.df['I_flux'].values)
+        df_std['I_flux_err'] = self.df['I_flux_err']/np.std(self.df['I_flux'].values)
+        return df_std
 
     def plot(self, ax):
         """
@@ -148,11 +148,29 @@ class Data(object):
             ax.errorbar(self.df['HJD - 2450000'], self.df['I_mag'], 
                 self.df['I_mag_err'], fmt='.', color='black', label='Data', 
                 ecolor='#686868')
-            plt.gca().invert_yaxis()
+            ax.invert_yaxis()
             ax.grid(True)
             ax.set_xlabel(self.df.columns[0])
             ax.set_ylabel(self.df.columns[1])
-    
+
+    def plot_standardized_data(self, ax):
+        """
+        Plots data in standardized modeling format.
+        
+        Parameters
+        ----------
+        ax : Matplotlib axes object
+        
+        """
+
+        df = self.get_standardized_data()
+        ax.errorbar(df['HJD - 2450000'], df['I_flux'], 
+            df['I_flux_err'], fmt='.', color='black', label='Data', 
+            ecolor='#686868')
+        ax.grid(True)
+        ax.set_xlabel(df.columns[0])
+        ax.set_ylabel(df.columns[1])
+            
 class OGLEData(Data):
     """Subclass of data class for dealing with OGLE data."""
     def __init__(self, event_dir):
