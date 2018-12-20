@@ -40,35 +40,10 @@ np.random.seed(42)
 for event in events: 
     print("Fitting models for event ", event.event_name)
 
-
     output_dir_standard = 'output/' + event.event_name + '/PointSourcePointLens'
 
     # Fit a non GP and a GP model
     model1 = PointSourcePointLens(event)
-
-#    # Sample prior predictive distribution
-#    t_ = np.linspace(event.df['HJD - 2450000'].values[0], 
-#        event.df['HJD - 2450000'].values[-1], 1000)
-#
-#    with model1 as model_standard:
-#        trace = pm.sample_prior_predictive(50)
-#
-#    Fb = trace['Fb']
-#    u0 = trace['u0']
-#    t0 = trace['t0']
-#    DeltaF = trace['DeltaF']
-#    tE = trace['tE']
-#
-#    # Plot the predictions
-#    fig, ax = plt.subplots(figsize=(25, 6))
-#    for i in range(len(Fb)):
-#        u = np.sqrt(u0[i]**2 + ((t_ - t0[i])/tE[i])**2)
-#        A = lambda u: (u**2 + 2)/(u*np.sqrt(u**2 + 4))
-#        mean_func = DeltaF[i]*(A(u) - 1)/(A(u0[i]) - 1) + Fb[i]
-#        ax.plot(t_, mean_func, color="C1", alpha=0.5)
-#
-#    plt.savefig(output_dir_standard + '/prior_predictive.png')
-
 
     def model_for_sbc(y=None):
         with pm.Model() as model_std:
@@ -109,18 +84,11 @@ for event in events:
 
         return model_std
 
-
-    def return_model(y=None):
-        with model1 as model_standard:
-            print(model_standard.vars)
-        return model_standard
-
-    print(type(model_for_sbc))
-    print(type(return_model))
-
     sbc = SBC(model_for_sbc, 'y',
             num_simulations=1000,
             sample_kwargs={'draws': 25, 'tune': 50})
 
     sbc.run_simulations()
-    sbc.plot_sbc()
+    fig, ax = sbc.plot_sbc()
+
+    plt.savefig(output_dir_standard + '/SBC.png')

@@ -79,10 +79,10 @@ for entry in os.scandir('output'):
 #        plt.savefig(entry.path + '/PointSourcePointLens' + '/model.png')    
 #
         # Set up GP model
-        model = PointSourcePointLensMatern32(t, F, sigF)
+        model = PointSourcePointLensMatern32(event)
         print(len(model.vars))
         with model as model_matern32:
-            trace = pm.load_trace(entry.path + '/PointSourcePointLensGP/' +\
+            trace = pm.load_trace(data_path + entry.name + '/PointSourcePointLensGP/' +\
             'model.trace') 
 
         t_ = np.linspace(t[0], t[-1], 5000)
