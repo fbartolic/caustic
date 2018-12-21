@@ -178,33 +178,6 @@ class PointSourcePointLensMatern32(pm.Model):
         return (inverse_gamma_cdf(x_min, alpha, beta) - \
         lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
 
-    def plot_model(self, ax, x, trace, output_dir):
-        """"""
-        # Generate 50 realizations of the prediction sampling randomly from the chain
-        N_pred = 50
-        pred_mu = np.empty((N_pred, len(x)))
-        pred_var = np.empty((N_pred, len(x)))
-        mean_function = np.empty((N_pred, len(x)))
-
-        pred = self.gp.predict(t_, return_var=True)
-        for i, sample in enumerate(xo.get_samples_from_trace(trace, size=N_pred)):
-            Fb = self.Fb
-            u0 = self.u0
-            t0 = self.t0
-            DeltaF = self.DeltaF
-            tE = self.tE
-            u = T.sqrt(u0**2 + ((x - t0)/tE)**2)
-            A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-            mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
-
-            pred_mu[i], pred_var[i] = xo.eval_in_model(pred, sample)
-            mean_function[i] = xo.eval_in_model(mean_func, sample)
-
-        # Plot the predictions
-        for i in range(len(pred_mu)):
-            mu = mean_function[i] + pred_mu[i]
-            ax.plot(x, mu, color='C1', alpha=0.2)
-
 class ZeroMeanMatern32(pm.Model):
     def __init__(self, data, name='', model=None):
         super(ZeroMeanMatern32, self).__init__(name, model)

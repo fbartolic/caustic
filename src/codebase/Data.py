@@ -1,6 +1,8 @@
 import pandas as pd  
 import numpy as np 
 from matplotlib import pyplot as plt
+from io import StringIO
+import re
 
 class Data(object):
     """
@@ -136,22 +138,20 @@ class Data(object):
         ax : Matplotlib axes object
         
         """
-
         if (self.units=='fluxes'):
             ax.errorbar(self.df['HJD - 2450000'], self.df['I_flux'], 
                 self.df['I_flux_err'], fmt='.', color='black', label='Data', 
                 ecolor='#686868')
-            ax.grid(True)
-            ax.set_xlabel(self.df.columns[0])
-            ax.set_ylabel(self.df.columns[1])
         else:
             ax.errorbar(self.df['HJD - 2450000'], self.df['I_mag'], 
                 self.df['I_mag_err'], fmt='.', color='black', label='Data', 
                 ecolor='#686868')
             ax.invert_yaxis()
-            ax.grid(True)
-            ax.set_xlabel(self.df.columns[0])
-            ax.set_ylabel(self.df.columns[1])
+
+        ax.set_xlabel(self.df.columns[0])
+        ax.set_ylabel(self.df.columns[1])
+        ax.set_title(self.event_name)
+        ax.grid(True)
 
     def plot_standardized_data(self, ax):
         """
@@ -177,7 +177,7 @@ class OGLEData(Data):
         super(OGLEData, self).__init__(event_dir)
         with open(event_dir + '/params.dat') as f:
             lines = f.readlines() 
-            self.event_name = lines[0]
+            self.event_name = lines[0][:-1]
             self.RA = lines[4][15:]
             self.Dec = lines[5][15:]
         self.filters = ['OGLE I band']
@@ -195,21 +195,42 @@ class MOAData(Data):
     def __init__(self, event_path):
         super(MOAData, self).__init__(event_path)
         self.observatory = 'MOA'
+        self.units = 'fluxes'
 
     def load_data(self, event_path):
         """Returns dataframe with raw data."""
+        # It's not sure that time for MOA data is in HJD
         with open(event_path) as f:
-            lines = f.readlines() 
             contents = f.readlines()
             processed = ''
             for i in range(len(contents)):
                 processed += re.sub("\s+", ",", contents[i].strip()) + '\n' 
             processed = StringIO(processed)
-            df = pd.read_csv(processed, sep=',', header=None, skiprows=10)
+            df = pd.read_csv(processed, sep=',', header=None, skiprows=10,
+                usecols=(0, 1, 2), 
+                names=['HJD - 2450000', 'I_flux', 'I_flux_err'])
+
+            # Remove the random value with zero time
+            df = df[df['HJD - 2450000'] != 0]
+
+            df['HJD - 2450000'] = df['HJD - 2450000'] - 2450000 
+
         return df
 
 class LCOData(Data):
-    pass
+    """Subclass of data class for dealing with ROME_REA data."""
+    def __init__(self, event_path):
+        super(LCOData, self).__init__(event_path)
+        self.observatory = 'LCO ROME/REA'
+
+    def load_data(self, event_path):
+        """Returns dataframe with raw data."""
+        df = pd.read_csv(event_path, sep=' ',  usecols=(1, 13, 14), 
+            names=['HJD - 2450000', 'I_mag', 'I_mag_err'])
+
+        df['HJD - 2450000'] = df['HJD - 2450000'] - 2450000 
+        return df
+
 
 class KMTData(Data):
     pass

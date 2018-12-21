@@ -9,6 +9,7 @@ sys.path.append("codebase")
 sys.path.append("models")
 
 import pymc3 as pm
+import arviz as az
 import theano
 import theano.tensor as T
 from theano.ifelse import ifelse
@@ -45,28 +46,20 @@ def qq_plot(ax, residuals):
     ax.set_xlabel("Modeled residuals")
     ax.set_ylabel("Measured residuals")
 
-
 data_path = '/home/star/fb90/data/OGLE_ews/2017/'
 
 # Iterate over events, load data, and make plots 
 for entry in os.scandir('output'):
     if entry.is_dir():
-
-        data_dir =  data_path + 'blg-' + entry.name[-5:-1]
+        data_dir =  data_path + 'blg-' + entry.name[-4:]
         event = OGLEData(data_dir)
-
-        # Load posterior samples
-        labels = ['$\Delta F$', '$F_b$', '$ln_K$', '$t_0$', '$t_{eff}$', 
-            '$t_E$', '$ln_K$']
-        labels_GP = ['$\ln\sigma$', 'ln_rho', 'ln_K', '$\Delta F$', 
-            '$F_b$', '$t_0$', '$t_{eff}$', '$t_E$']
 
         # Plot median models
         #quantiles = np.percentile(samples, [16, 50, 84], axis=0)
         #quantiles_GP = np.percentile(samples_GP, 
             #[16, 50, 84], axis=0)
         t_ = np.linspace(event.df['HJD - 2450000'].values[0], 
-                    event.df['HJD - 2450000'].values[-1], 2000)
+                    event.df['HJD - 2450000'].values[-1], 5000)
 
         ## Calculate residuals
 #        model_emcee = PointSourcePointLens_emcee(t, F, sigF)
@@ -80,75 +73,121 @@ for entry in os.scandir('output'):
 #
         # Set up GP model
         samples_dir = 'output/' + entry.name + '/PointSourcePointLensGP/' 
-        print(repr(samples_dir + 'model.trace'))
-        model = PointSourcePointLensMatern32(event, parametrization='other')
-        with model as model_matern32:
+        model_matern32 = PointSourcePointLensMatern32(event, parametrization='other')
+
+        with model_matern32:
             trace = pm.load_trace(samples_dir + 'model.trace') 
             print(pm.summary(trace))
 
-        # Generate 50 realizations of the prediction sampling randomly from the chain
-        N_pred = 50
-        pred_mu = np.empty((N_pred, len(t_)))
-        pred_var = np.empty((N_pred, len(t_)))
-        mean_function = np.empty((N_pred, len(t_)))
+        def plot_residuals(ax, pm_model, trace, data):
+            df = data.get_standardized_data()
 
-        with model_matern32:
-            pred = model_matern32.gp.predict(t_, return_var=True)
-            for i, sample in enumerate(xo.get_samples_from_trace(trace, size=N_pred)):
+            samples = pm.trace_to_dataframe(trace).values
+            print(np.shape(samples))
+            quantiles = np.percentile(samples, [16, 50, 84], axis=0)
+            median_params = quantiles[1]
+
+            t = df['HJD - 2450000'].values
+
+            with pm_model:
+                pred = model_matern32.gp.predict(t, return_var=True)
                 Fb = model_matern32.Fb
                 u0 = model_matern32.u0
                 t0 = model_matern32.t0
                 DeltaF = model_matern32.DeltaF
                 tE = model_matern32.tE
-                u = T.sqrt(u0**2 + ((t_ - t0)/tE)**2)
+                u = T.sqrt(u0**2 + ((t - t0)/tE)**2)
                 A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
                 mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
 
-                pred_mu[i], pred_var[i] = xo.eval_in_model(pred, sample)
-                mean_function[i] = xo.eval_in_model(mean_func, sample)
+                pred_mu, pred_var = xo.eval_in_model(pred, median_params)
+                mean_function = xo.eval_in_model(mean_func, median_params)
 
-        # Plot the predictions
+            # Plot the predictions
+            mu = mean_function + pred_mu
+            residuals = df['I_flux'].values - mu
+            ax.plot(t, residuals, 'k.')
+
         fig, ax = plt.subplots(figsize=(25, 6))
-        for i in range(len(pred_mu)):
-            mu = mean_function[i] + pred_mu[i]
-            ax.plot(t_, mu, color='C1', alpha=0.2)
+        plot_residuals(ax, model_matern32, trace, event)
 
+        def plot_gp_model(ax, pm_model, trace, t_):
+            # Generate 50 realizations of the prediction sampling randomly from the chain
+            N_pred = 50
+            pred_mu = np.empty((N_pred, len(t_)))
+            pred_var = np.empty((N_pred, len(t_)))
+            mean_function = np.empty((N_pred, len(t_)))
+
+            with pm_model:
+                pred = model_matern32.gp.predict(t_, return_var=True)
+                for i, sample in enumerate(xo.get_samples_from_trace(trace, 
+                        size=N_pred)):
+                    Fb = model_matern32.Fb
+                    u0 = model_matern32.u0
+                    t0 = model_matern32.t0
+                    DeltaF = model_matern32.DeltaF
+                    tE = model_matern32.tE
+                    u = T.sqrt(u0**2 + ((t_ - t0)/tE)**2)
+                    A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+                    mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
+
+                    pred_mu[i], pred_var[i] = xo.eval_in_model(pred, sample)
+                    mean_function[i] = xo.eval_in_model(mean_func, sample)
+
+            # Plot the predictions
+            for i in range(len(pred_mu)):
+                mu = mean_function[i] + pred_mu[i]
+                ax.plot(t_, mu, color='C1', alpha=0.2)
+
+        fig, ax = plt.subplots(figsize=(25, 6))
+        plot_gp_model(ax, model_matern32, trace, t_)
         event.plot_standardized_data(ax)
 
         plt.savefig(samples_dir + 'model.png')
 
-        # Plot detail
-        t_ = np.linspace(event.df['HJD - 2450000'].values[0], 
-                    event.df['HJD - 2450000'].values[800], 5000)
+        # Plot part of lightcurve
+        ti = event.df['HJD - 2450000'].values[0]
+        tf = event.df['HJD - 2450000'].values[800]
+        t_ = np.linspace(ti, tf, 5000)
 
-        plt.clf()
-        with model_matern32:
-            pred2 = model_matern32.gp.predict(t_, return_var=True)
-            for i, sample in enumerate(xo.get_samples_from_trace(trace, size=N_pred)):
-                Fb = model_matern32.Fb
-                u0 = model_matern32.u0
-                t0 = model_matern32.t0
-                DeltaF = model_matern32.DeltaF
-                tE = model_matern32.tE
-                u = T.sqrt(u0**2 + ((t_ - t0)/tE)**2)
-                A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-                mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
-
-                pred_mu[i], pred_var[i] = xo.eval_in_model(pred2, sample)
-                mean_function[i] = xo.eval_in_model(mean_func, sample)
-
-        # Plot the predictions
-        event.plot_standardized_data(ax)
         fig, ax = plt.subplots(figsize=(25, 6))
-        for i in range(len(pred_mu)):
-            mu = mean_function[i] + pred_mu[i]
-            ax.plot(t_, mu, color='C1', alpha=0.2)
-
-        ax.set_xlim(event.df['HJD - 2450000'].values[0],
-            event.df['HJD - 2450000'].values[800])
-
+        plot_gp_model(ax, model_matern32, trace, t_)
+        event.plot_standardized_data(ax)
+        ax.set_xlim(ti, tf)
         plt.savefig(samples_dir + 'model_detail.png')
 
+#        # Plot detail
+#        t_ = np.linspace(event.df['HJD - 2450000'].values[0], 
+#                    event.df['HJD - 2450000'].values[800], 5000)
+#
+#        plt.clf()
+#        with model_matern32:
+#            pred2 = model_matern32.gp.predict(t_, return_var=True)
+#            for i, sample in enumerate(xo.get_samples_from_trace(trace, size=N_pred)):
+#                Fb = model_matern32.Fb
+#                u0 = model_matern32.u0
+#                t0 = model_matern32.t0
+#                DeltaF = model_matern32.DeltaF
+#                tE = model_matern32.tE
+#                u = T.sqrt(u0**2 + ((t_ - t0)/tE)**2)
+#                A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+#                mean_func = DeltaF*(A(u) - 1)/(A(u0) - 1) + Fb
+#
+#                pred_mu[i], pred_var[i] = xo.eval_in_model(pred2, sample)
+#                mean_function[i] = xo.eval_in_model(mean_func, sample)
+#
+#        # Plot the predictions
+#        event.plot_standardized_data(ax)
+#        fig, ax = plt.subplots(figsize=(25, 6))
+#        for i in range(len(pred_mu)):
+#            mu = mean_function[i] + pred_mu[i]
+#            ax.plot(t_, mu, color='C1', alpha=0.2)
+#
+#        ax.set_xlim(event.df['HJD - 2450000'].values[0],
+#            event.df['HJD - 2450000'].values[800])
+#
+#        plt.savefig(samples_dir + 'model_detail.png')
+#
 
 
 
