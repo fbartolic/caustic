@@ -153,7 +153,7 @@ class Data(object):
         ax.set_title(self.event_name)
         ax.grid(True)
 
-    def plot_standardized_data(self, ax):
+    def plot_standardized_data(self, ax, mask):
         """
         Plots data in standardized modeling format.
         
@@ -161,11 +161,14 @@ class Data(object):
         ----------
         ax : Matplotlib axes object
         
+        mask : Integer array
         """
-
         df = self.get_standardized_data()
-        ax.errorbar(df['HJD - 2450000'], df['I_flux'], 
-            df['I_flux_err'], fmt='.', color='black', label='Data', 
+        t = df['HJD - 2450000'].values[mask]
+        F = df['I_flux'].values[mask]
+        F_err = df['I_flux_err'].values[mask]
+
+        ax.errorbar(t, F, F_err, fmt='.', color='black', label='Data', 
             ecolor='#686868')
         ax.grid(True)
         ax.set_xlabel(df.columns[0])
