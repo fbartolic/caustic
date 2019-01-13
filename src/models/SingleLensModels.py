@@ -13,7 +13,6 @@ from exoplanet.gp import terms, GP
 from exoplanet.utils import get_samples_from_trace
 from exoplanet.utils import eval_in_model
 
-
 from scipy.special import gamma
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
@@ -80,7 +79,7 @@ class PointSourcePointLens(pm.Model):
     def joint_density(self, value):
         teff = T.cast(T.exp(value[0]), 'float64')
         tE = T.cast(T.exp(value[1]), 'float64')
-        sig_tE = T.cast(600., 'float64') # p(tE)~N(0, 600)
+        sig_tE = T.cast(365., 'float64') # p(tE)~N(0, 600)
         sig_u0 = T.cast(1., 'float64') # p(u0)~N(0, 1)
 
         return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
@@ -118,7 +117,7 @@ class PointSourcePointLensMatern32(pm.Model):
 
         if (parametrization=='standard'):
             self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
-            self.tE = BoundedNormal('tE', mu=0., sd=600., testval=20.)
+            self.tE = BoundedNormal('tE', mu=0., sd=400., testval=20.)
         else:
             self.ln_teff_ln_tE = pm.DensityDist('ln_teff_ln_tE', 
                 self.joint_density, shape=2, 

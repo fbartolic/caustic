@@ -2,6 +2,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
+import pandas as pd
 import os
 import sys
 sys.path.append("../../exoplanet")
@@ -208,31 +209,40 @@ for entry in os.scandir('output'):
 
         # Plot non-GP models
         output_dir = 'output/' + entry.name + '/PointSourcePointLens/' 
-        model_standard = PointSourcePointLens(event, parametrization='other')
+        model_standard = PointSourcePointLens(event, parametrization='standard')
 
         with model_standard:
-            trace = pm.load_trace(output_dir + 'model.trace') 
+            trace_standard = pm.load_trace(output_dir + 'model.trace') 
         
         fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
              figsize=(25, 10), sharex=True)
         fig.subplots_adjust(hspace=0.05)
-        plot_model_and_residuals(ax, event, model_standard, trace, 0,
+        plot_model_and_residuals(ax, event, model_standard, trace_standard, 0,
             len(event.df['HJD - 2450000']) - 1)
         plt.savefig(output_dir + 'model.pdf')
 
+        # QQ plot 
+        df = event.get_standardized_data()
+        residuals = df['I_flux'].values -\
+            evaluate_median_model_on_grid(event, model_standard, 
+            trace_standard, df['HJD - 2450000'].values)
+        fig, ax = plt.subplots(figsize=(6,6))
+        qq_plot(ax, residuals)
+        plt.savefig(entry.path + '/PointSourcePointLens' + '/QQ_plot.png')    
+
         # Plot GP models
         output_dir_gp = 'output/' + entry.name + '/PointSourcePointLensGP/' 
-        model_matern32 = PointSourcePointLensMatern32(event, parametrization='other')
+        model_matern32 = PointSourcePointLensMatern32(event, 
+            parametrization='standard')
 
         with model_matern32:
-            trace = pm.load_trace(output_dir_gp + 'model.trace') 
+            trace_gp = pm.load_trace(output_dir_gp + 'model.trace') 
 
-        
         # Plot GP model for complete lightcurve
         fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
              figsize=(25, 10), sharex=True)
         fig.subplots_adjust(hspace=0.05)
-        plot_gp_model_and_residuals(ax, event, model_matern32, trace, 0,
+        plot_gp_model_and_residuals(ax, event, model_matern32, trace_gp, 0,
             len(event.df['HJD - 2450000']) - 1)
         plt.savefig(output_dir_gp + 'model.pdf')
 
@@ -240,29 +250,25 @@ for entry in os.scandir('output'):
         fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
              figsize=(25, 10), sharex=True)
         fig.subplots_adjust(hspace=0.05)
-        plot_gp_model_and_residuals(ax, event, model_matern32, trace, 0, 800)
+        plot_gp_model_and_residuals(ax, event, model_matern32, trace_gp, 0, 800)
         plt.savefig(output_dir_gp + 'model_detail.pdf')
 
-        ## Plot a Quantile-Quantile plot (QQ plot) for non-GP model
-        #plt.clf()
-        #fig, ax = plt.subplots(figsize=(6,6))
-        #qq_plot(ax, residuals)
-        #plt.savefig(entry.path + '/PointSourcePointLens' + '/QQ_plot.png')    
-
         # Violin plot for important parameters
-        ## Seaborn requires that both arrays with posterior samples have the
-        ## same dimension
-        #n = len(samples_GP[:, -2]) - len(samples[:, -2])
-        #print(len(samples[:, -2]))
-        #print(len(samples_GP[n:, -2]))
-        #df = pd.DataFrame(data=np.stack((samples[:, -2], 
-            #samples_GP[n:, -2]), axis=1), columns=["no GP", "GP"])
-        
-        #plt.clf()
-        #fig, ax = plt.subplots(figsize=(8, 6))
-        #ax = sns.violinplot(data=df)
-        #ax.set_xlabel('Model')
-        #ax.set_ylabel(r'$t_E$ [days]')
-        #ax.grid(True)
+        # Seaborn requires that both arrays with posterior samples have the
+        # same dimension
+        tE_samples = trace_standard['tE']
+        tE_samples_gp = trace_gp['tE']
 
-        #plt.savefig(entry.path  + '/tE_posterior.png')
+        n = len(tE_samples_gp) - len(tE_samples)
+
+        df = pd.DataFrame(data=np.stack((tE_samples, tE_samples_gp[n:]), axis=1), 
+            columns=["no GP", "GP"])
+        
+        plt.clf()
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax = sns.violinplot(data=df)
+        ax.set_xlabel('Model')
+        ax.set_ylabel(r'$t_E$ [days]')
+        ax.grid(True)
+
+        plt.savefig(output_dir_gp + 'tE_posteriors.pdf')

@@ -26,8 +26,8 @@ lightcurves = [] # data for each event
 limits = [1700, 1900, 1900, 1700, 2500]
  
 i = 0
-n_events = 5
-data_path = '/home/star/fb90/data/OGLE_ews/2017'
+n_events = 20
+data_path = '/home/fran/data/OGLE_ews/2017'
 for entry in sorted(os.listdir(data_path)):
     if (i < n_events):
         events.append(entry)
