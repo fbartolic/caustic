@@ -198,7 +198,7 @@ def plot_gp_model_and_residuals(ax, event, pm_model, trace, ti_idx,
 
 events = [] # event names
 lightcurves = [] # data for each event
-data_path = '/home/fran/data/OGLE_ews/2017/'
+data_path = '/home/star/fb90/data/OGLE_ews/2017/'
 
 # Iterate over events, load data, and make plots 
 for entry in os.scandir('output'):
@@ -209,7 +209,7 @@ for entry in os.scandir('output'):
 
         # Plot non-GP models
         output_dir = 'output/' + entry.name + '/PointSourcePointLens/' 
-        model_standard = PointSourcePointLens(event, parametrization='standard')
+        model_standard = PointSourcePointLens(event, use_joint_prior=True)
 
         with model_standard:
             trace_standard = pm.load_trace(output_dir + 'model.trace') 
@@ -233,7 +233,7 @@ for entry in os.scandir('output'):
         # Plot GP models
         output_dir_gp = 'output/' + entry.name + '/PointSourcePointLensGP/' 
         model_matern32 = PointSourcePointLensMatern32(event, 
-            parametrization='standard')
+            use_joint_prior=True)
 
         with model_matern32:
             trace_gp = pm.load_trace(output_dir_gp + 'model.trace') 
@@ -250,7 +250,7 @@ for entry in os.scandir('output'):
         fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
              figsize=(25, 10), sharex=True)
         fig.subplots_adjust(hspace=0.05)
-        plot_gp_model_and_residuals(ax, event, model_matern32, trace_gp, 0, 800)
+        plot_gp_model_and_residuals(ax, event, model_matern32, trace_gp, 0, 200)
         plt.savefig(output_dir_gp + 'model_detail.pdf')
 
         # Violin plot for important parameters
@@ -270,5 +270,8 @@ for entry in os.scandir('output'):
         ax.set_xlabel('Model')
         ax.set_ylabel(r'$t_E$ [days]')
         ax.grid(True)
+        sigtE = np.std(tE_samples_gp)
+        median_tE = np.median(tE_samples_gp)
+        ax.set_ylim(median_tE - 5*sigtE, median_tE + 5*sigtE)
 
         plt.savefig(output_dir_gp + 'tE_posteriors.pdf')

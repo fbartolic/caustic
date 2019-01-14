@@ -6,7 +6,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
-import os
+import os, random
 import sys
 
 sys.path.append("../../exoplanet")
@@ -19,22 +19,27 @@ from exoplanet.gp import terms, GP
 import exoplanet as xo
 
 mpl.rc('text', usetex=False)
+np.random.seed(42)
 
 events = []  # data for each event
 
-#i = 0
-#n_events = 20
-#data_path = '/home/fran/data/OGLE_ews/2017/'
-#for entry in os.listdir(data_path):
-#    if (i < n_events):
-#        event = OGLEData(data_path + entry)
-#        events.append(event)
-#        i = i + 1
+data_path = '/home/star/fb90/data/OGLE_ews/2017/'
+dirs = []
+for directory in os.listdir(data_path):
+    dirs.append(directory)
 
-np.random.seed(42)
+random.shuffle(dirs)
+i = 0
+n_events = 20
+for directory in dirs:
+    if (i < n_events):
+        event = OGLEData(data_path + directory)
+        events.append(event)
+        i = i + 1
 
-event = OGLEData('/home/fran/data/OGLE_ews/2017/blg-1403')
-events.append(event) 
+
+#event = OGLEData('/home/star/fb90/data/OGLE_ews/2017/blg-1403')
+#events.append(event) 
 
 for event in events:
     print("Fitting models for event ", event.event_name)
@@ -48,8 +53,8 @@ for event in events:
         os.makedirs(output_dir_gp)
 
     # Fit a non GP and a GP model
-    model1 = PointSourcePointLensMatern32(event, parametrization='standard')
-    model2 = PointSourcePointLens(event, parametrization='standard')
+    model1 = PointSourcePointLensMatern32(event, use_joint_prior=True)
+    model2 = PointSourcePointLens(event, use_joint_prior=True)
 
     # Sample models with NUTS
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
@@ -78,10 +83,10 @@ for event in events:
         'DeltaF': trace_standard['DeltaF'].mean(),
         'Fb': trace_standard['Fb'].mean(),
         't0': trace_standard['t0'].mean(),
-#        'ln_teff_ln_tE': [trace_standard['ln_teff_ln_tE'][0].mean(),
-#                          trace_standard['ln_teff_ln_tE'][1].mean()],
-        'u0': trace_standard['u0'].mean(),
-        'tE': trace_standard['tE'].mean(),
+        'ln_teff_ln_tE': [trace_standard['ln_teff_ln_tE'][0].mean(),
+                          trace_standard['ln_teff_ln_tE'][1].mean()],
+#        'u0': trace_standard['u0'].mean(),
+#        'tE': trace_standard['tE'].mean(),
         'K': trace_standard['K'].mean()
     }
     with model_matern32:
@@ -111,8 +116,8 @@ for event in events:
         _ = pm.traceplot(trace, ax=ax)
         plt.savefig(output_dir + '/traceplots.png')
 
-    save_traceplots(trace_standard, 6, output_dir_standard)
-    save_traceplots(trace_gp, 10, output_dir_gp)
+    save_traceplots(trace_standard, 7, output_dir_standard)
+    save_traceplots(trace_gp, 11, output_dir_gp)
 
     # Display the total number and percentage of divergent
     def save_divergences_stats(trace, output_dir):
@@ -131,7 +136,12 @@ for event in events:
                 color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
     plt.savefig(output_dir_standard + '/pairplot.png')
 
-    pm.pairplot(trace_gp, varnames=['ln_teff_ln_tE_0', 'ln_teff_ln_tE_1'],
+    pm.pairplot(trace_gp, 
                 divergences=True, plot_transformed=True, text_size=11,
                 color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
     plt.savefig(output_dir_gp + '/pairplot.png')
+
+    pm.pairplot(trace_gp, varnames=['ln_teff_ln_tE', 'ln_sigma', 'ln_rho', 't0'],
+                divergences=True, plot_transformed=True, text_size=11,
+                color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
+    plt.savefig(output_dir_gp + '/pairplot2.png')
