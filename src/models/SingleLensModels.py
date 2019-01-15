@@ -179,9 +179,9 @@ class PointSourcePointLensMatern32(pm.Model):
         return (inverse_gamma_cdf(x_min, alpha, beta) - \
         lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
 
-class PointSourcePointLensMatern32Product(pm.Model):
+class PointSourcePointLensSHO(pm.Model):
     def __init__(self, data, use_joint_prior=True, name='', model=None):
-        super(PointSourcePointLensMatern32, self).__init__(name, model)
+        super(PointSourcePointLensSHO, self).__init__(name, model)
 
         # Pre process the data
         data.convert_data_to_fluxes()
@@ -194,8 +194,10 @@ class PointSourcePointLensMatern32Product(pm.Model):
 
         # Custom prior distributions 
         # Compute parameters for the prior on GP hyperparameters
-        invgamma_a, invgamma_b =  fsolve(self.solve_for_invgamma_params, (0.1, 0.1), 
-        (np.median(np.diff(self.t)), self.t[-1] - self.t[0]))
+        self.invgamma_a, self.invgamma_b =  fsolve(self.solve_for_invgamma_params,
+            (0.1, 0.1), (np.median(np.diff(self.t)), self.t[-1] - self.t[0]))
+        print(self.invgamma_a)
+        print(self.invgamma_b)
 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
         BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
@@ -223,26 +225,19 @@ class PointSourcePointLensMatern32Product(pm.Model):
                 T.exp(self.ln_teff_ln_tE[0])/self.tE) 
 
         # Noise model parameters
-        self.sigma1 = BoundedNormal('sigma', mu=0., sd=3., testval=0.5)
-        self.rho1 = pm.InverseGamma('rho', alpha=invgamma_a, beta=invgamma_b, 
-            testval=3.)
-        self.sigma2 = BoundedNormal('sigma', mu=0., sd=3., testval=0.5)
-        self.rho2 = pm.InverseGamma('rho', alpha=invgamma_a, beta=invgamma_b, 
-            testval=3.)
+        self.S0= BoundedNormal('S0', mu=0., sd=3., testval=0.5)
+        self.ln_omega0 = pm.DensityDist('ln_omega0', self.prior_for_ln_omega,
+            testval=3)
+        self.Q = BoundedNormal('Q', mu=0., sd=100., testval=1/np.sqrt(2))
         self.K = BoundedNormal1('K', mu=1.001, sd=2., testval=1.5)
-        self.ln_rho1 = pm.Deterministic('ln_rho', T.log(self.rho1))
-        self.ln_sigma1 = pm.Deterministic('ln_sigma', T.log(self.sigma1))
-        self.ln_rho2 = pm.Deterministic('ln_rho', T.log(self.rho1))
-        self.ln_sigma2 = pm.Deterministic('ln_sigma', T.log(self.sigma1))
 
         # Calculate likelihood
-        term1 = terms.Matern32Term(sigma=self.sigma1, rho=self.rho1)
-        term2 = terms.Matern32Term(sigma=self.sigma2, rho=self.rho2)
-        kernel = term1*term2
+        term1 = terms.SHOTerm(S0=self.S0, Q=self.Q, log_w0=self.ln_omega0)
+        kernel = term1
         # The exoplanet.gp.GP constructor takes an optional argument J which 
         # specifies the width of the problem if it is known at compile time. 
         # This is actually two times the J from the celerite paper
-        self.gp = GP(kernel, self.t, (self.K*self.sigF)**2, J=2) # J=2 for Matern32 kernel
+        self.gp = GP(kernel, self.t, (self.K*self.sigF)**2, J=2) # J=2 for SHO kernel
 
         # Add a custom "potential" (log probability function) with the GP likelihood
         pm.Potential("gp", self.gp.log_likelihood(self.F - self.mean_function()))
@@ -262,6 +257,20 @@ class PointSourcePointLensMatern32Product(pm.Model):
 
         return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
             value[0] + value[1]
+    
+    def prior_for_ln_omega(self, value):
+        """
+        Custom prior for the ln_omega0 parameter in the SHO kernel (the resonant
+        frequency. The prior is derived from a an Inverse Gamma prior on
+        P0 = 2pi/omega0.
+        """
+        a = self.invgamma_a
+        b = self.invgamma_b
+        omega0 = T.cast(T.exp(value), 'float64')
+        P0 = 2*np.pi/omega0
+        return T.log(2*np.pi) - T.log(omega0) + a*T.log(b) - T.log(gamma(a)) -\
+            (a + 1)*T.log(P0) - b/P0
+        
 
     def solve_for_invgamma_params(self, params, x_min, x_max):
         """Returns parameters of an inverse gamma distribution p(x) such that 
@@ -279,6 +288,129 @@ class PointSourcePointLensMatern32Product(pm.Model):
         # Equation for the roots defining params which satisfy the constraint
         return (inverse_gamma_cdf(x_min, alpha, beta) - \
         lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
+
+class PointSourcePointLensSHOProduct(pm.Model):
+    def __init__(self, data, n_terms=1, use_joint_prior=True, name='', model=None):
+        super(PointSourcePointLensSHOProduct, self).__init__(name, model)
+        # Pre process the data
+        data.convert_data_to_fluxes()
+        df = data.get_standardized_data()
+
+        # Data
+        self.t = df['HJD - 2450000'].values
+        self.F = df['I_flux'].values
+        self.sigF = df['I_flux_err'].values
+
+        # Custom prior distributions 
+        # Compute parameters for the prior on GP hyperparameters
+        self.invgamma_a, self.invgamma_b =  fsolve(self.solve_for_invgamma_params,
+            (0.1, 0.1), (np.median(np.diff(self.t)), self.t[-1] - self.t[0]))
+        print(self.invgamma_a)
+        print(self.invgamma_b)
+
+        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
+        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+        # Microlensing model parameters
+        self.DeltaF = BoundedNormal('DeltaF', mu=np.max(self.F), sd=1., testval=3.)
+        self.Fb = pm.Normal('Fb', mu=0., sd=0.1, testval=0.)
+        # Posterior is multi-modal in t0 and it's critical that the it is 
+        # initialized near the true value
+        t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
+        self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
+            testval=self.t[t0_guess_idx])
+
+        if (use_joint_prior==False):
+            self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+            self.tE = BoundedNormal('tE', mu=0., sd=400., testval=20.)
+        else:
+            self.ln_teff_ln_tE = pm.DensityDist('ln_teff_ln_tE', 
+                self.joint_density, shape=2, 
+                testval = [np.log(10), np.log(20.)]) # p(ln_teff,ln_tE)
+
+            # Deterministic transformations
+            self.tE = pm.Deterministic("tE", T.exp(self.ln_teff_ln_tE[1]))
+            self.u0 = pm.Deterministic("u0", 
+                T.exp(self.ln_teff_ln_tE[0])/self.tE) 
+
+        # Noise model parameters
+        self.S0= BoundedNormal('S0', mu=0., sd=3., testval=0.5)
+        self.ln_omega0 = pm.DensityDist('ln_omega0', self.prior_for_ln_omega,
+            testval=3)
+        self.Q = BoundedNormal('Q', mu=0., sd=100., testval=1/np.sqrt(2))
+        self.K = BoundedNormal1('K', mu=1.001, sd=2., testval=1.5)
+
+        # Calculate likelihood
+        term1 = terms.SHOTerm(S0=self.S0, Q=self.Q, log_w0=self.ln_omega0)
+        kernel = term1
+        
+        if (n_terms >= 2):
+            self.ln_omega1 = pm.DensityDist('ln_omega1', self.prior_for_ln_omega,
+                testval=3)
+            term2 = terms.SHOTerm(S0=1, Q=1/np.sqrt(2), log_w0=self.ln_omega1)
+            kernel *= term2
+
+        if (n_terms >= 3):
+            self.ln_omega2 = pm.DensityDist('ln_omega2', self.prior_for_ln_omega,
+                testval=3)
+            term3 = terms.SHOTerm(S0=1, Q=1/np.sqrt(2), log_w0=self.ln_omega2)
+            kernel *= term3
+       
+        # The exoplanet.gp.GP constructor takes an optional argument J which 
+        # specifies the width of the problem if it is known at compile time. 
+        # This is actually two times the J from the celerite paper
+        self.gp = GP(kernel, self.t, (self.K*self.sigF)**2) # J=2 for SHO kernel
+
+        # Add a custom "potential" (log probability function) with the GP likelihood
+        pm.Potential("gp", self.gp.log_likelihood(self.F - self.mean_function()))
+
+    def mean_function(self):
+        """PSPL model"""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return self.DeltaF*(A(u) - 1)/(A(self.u0) - 1) + self.Fb
+
+    def joint_density(self, value):
+        teff = T.cast(T.exp(value[0]), 'float64')
+        tE = T.cast(T.exp(value[1]), 'float64')
+        sig_tE = T.cast(365., 'float64') # p(tE)~N(0, 600)
+        sig_u0 = T.cast(1., 'float64') # p(u0)~N(0, 1)
+
+        return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
+            value[0] + value[1]
+    
+    def prior_for_ln_omega(self, value):
+        """
+        Custom prior for the ln_omega0 parameter in the SHO kernel (the resonant
+        frequency. The prior is derived from a an Inverse Gamma prior on
+        P0 = 2pi/omega0.
+        """
+        a = self.invgamma_a
+        b = self.invgamma_b
+        omega0 = T.cast(T.exp(value), 'float64')
+        P0 = 2*np.pi/omega0
+        return T.log(2*np.pi) - T.log(omega0) + a*T.log(b) - T.log(gamma(a)) -\
+            (a + 1)*T.log(P0) - b/P0
+        
+
+    def solve_for_invgamma_params(self, params, x_min, x_max):
+        """Returns parameters of an inverse gamma distribution p(x) such that 
+        0.1% of total prob. mass is assigned to values of x < x_min and 
+        1% of total prob. masss  to values greater than x_max."""
+        def inverse_gamma_cdf(x, alpha, beta):
+            return invgamma.cdf(x, alpha, scale=beta)
+
+        lower_mass = 0.01
+        upper_mass = 0.99
+
+        # Trial parameters
+        alpha, beta = params
+
+        # Equation for the roots defining params which satisfy the constraint
+        return (inverse_gamma_cdf(x_min, alpha, beta) - \
+        lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
+
 
 class ZeroMeanMatern32(pm.Model):
     def __init__(self, data, name='', model=None):

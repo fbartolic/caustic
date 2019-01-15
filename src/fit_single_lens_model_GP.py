@@ -14,12 +14,13 @@ sys.path.append("models")
 sys.path.append("codebase")
 from SingleLensModels import PointSourcePointLensMatern32
 from SingleLensModels import PointSourcePointLens
+from SingleLensModels import PointSourcePointLensSHO
 from Data import OGLEData
 from exoplanet.gp import terms, GP
 import exoplanet as xo
 
 mpl.rc('text', usetex=False)
-np.random.seed(42)
+random.seed(42)
 
 events = []  # data for each event
 
@@ -37,7 +38,6 @@ for directory in dirs:
         events.append(event)
         i = i + 1
 
-
 #event = OGLEData('/home/star/fb90/data/OGLE_ews/2017/blg-1403')
 #events.append(event) 
 
@@ -46,15 +46,19 @@ for event in events:
 
     # Define output directories
     output_dir_standard = 'output/' + event.event_name + '/PointSourcePointLens'
-    output_dir_gp = 'output/' + event.event_name + '/PointSourcePointLensGP'
+    output_dir_matern32 = 'output/' + event.event_name + '/PointSourcePointLensGP'
+    output_dir_SHO = 'output/' + event.event_name + '/PointSourcePointLensSHO'
     if not os.path.exists(output_dir_standard):
         os.makedirs(output_dir_standard)
-    if not os.path.exists(output_dir_gp):
-        os.makedirs(output_dir_gp)
+    if not os.path.exists(output_dir_matern32):
+        os.makedirs(output_dir_matern32)
+    if not os.path.exists(output_dir_SHO):
+        os.makedirs(output_dir_SHO)
 
     # Fit a non GP and a GP model
     model1 = PointSourcePointLensMatern32(event, use_joint_prior=True)
     model2 = PointSourcePointLens(event, use_joint_prior=True)
+    model3 = PointSourcePointLensSHO(event, use_joint_prior=True)
 
     # Sample models with NUTS
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
@@ -78,6 +82,11 @@ for event in events:
         for RV in model_matern32.basic_RVs:
             print(RV.name, RV.logp(model_matern32.test_point))
 
+    print("Sampling model with SHO kernel:")
+    with model3 as model_SHO:
+        for RV in model_SHO.basic_RVs:
+            print(RV.name, RV.logp(model_SHO.test_point))
+
     # start at the mean posterior values of non-GP model
     start_GP = {
         'DeltaF': trace_standard['DeltaF'].mean(),
@@ -85,16 +94,27 @@ for event in events:
         't0': trace_standard['t0'].mean(),
         'ln_teff_ln_tE': [trace_standard['ln_teff_ln_tE'][0].mean(),
                           trace_standard['ln_teff_ln_tE'][1].mean()],
-#        'u0': trace_standard['u0'].mean(),
-#        'tE': trace_standard['tE'].mean(),
         'K': trace_standard['K'].mean()
     }
     with model_matern32:
         burnin = sampler.tune(tune=4000, start=start_GP,
-                              step_kwargs=dict(target_accept=0.95))
+                            step_kwargs=dict(target_accept=0.95))
 
     with model_matern32:
-        trace_gp = sampler.sample(draws=2000)
+        trace_matern32 = sampler.sample(draws=2000)
+
+    with model_SHO:
+        burnin = sampler.tune(tune=4000, start=start_GP,
+                              step_kwargs=dict(target_accept=0.95))
+
+    with model_SHO:
+        trace_SHO = sampler.sample(draws=2000)
+
+    # Save posterior samples
+    pm.save_trace(trace_standard, output_dir_standard + '/model.trace',
+                  overwrite=True)
+    pm.save_trace(trace_matern32, output_dir_matern32 + '/model.trace', overwrite=True)
+    pm.save_trace(trace_SHO, output_dir_SHO + '/model.trace', overwrite=True)
 
     # Save output stats to file
     def save_summary_stats(trace, output_dir):
@@ -103,21 +123,8 @@ for event in events:
         df.to_csv(output_dir + '/sampling_stats.csv')
 
     save_summary_stats(trace_standard, output_dir_standard)
-    save_summary_stats(trace_gp, output_dir_gp)
-
-    # Save posterior samples
-    pm.save_trace(trace_standard, output_dir_standard + '/model.trace',
-                  overwrite=True)
-    pm.save_trace(trace_gp, output_dir_gp + '/model.trace', overwrite=True)
-
-    # Save traceplots
-    def save_traceplots(trace, n_pars, output_dir):
-        fig, ax = plt.subplots(n_pars, 2, figsize=(20, 30))
-        _ = pm.traceplot(trace, ax=ax)
-        plt.savefig(output_dir + '/traceplots.png')
-
-    save_traceplots(trace_standard, 7, output_dir_standard)
-    save_traceplots(trace_gp, 11, output_dir_gp)
+    save_summary_stats(trace_matern32, output_dir_matern32)
+    save_summary_stats(trace_SHO, output_dir_SHO)
 
     # Display the total number and percentage of divergent
     def save_divergences_stats(trace, output_dir):
@@ -129,19 +136,24 @@ for event in events:
             print(f'Percentage of Divergent %.1f' % divperc, file=text_file)
 
     save_divergences_stats(trace_standard, output_dir_standard)
-    save_divergences_stats(trace_gp, output_dir_gp)
+    save_divergences_stats(trace_matern32, output_dir_matern32)
+    save_divergences_stats(trace_SHO, output_dir_SHO)
 
+    rvs = [rv.name for rv in model_standard.basic_RVs]
     pm.pairplot(trace_standard,
-                divergences=True, plot_transformed=True, text_size=11,
+                divergences=True, plot_transformed=True, text_size=25,
+                varnames=rvs[:-1],
                 color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
     plt.savefig(output_dir_standard + '/pairplot.png')
 
-    pm.pairplot(trace_gp, 
-                divergences=True, plot_transformed=True, text_size=11,
+    pm.pairplot(trace_matern32, 
+                divergences=True, plot_transformed=True, text_size=25,
+                varnames=[rv.name for rv in model_matern32.basic_RVs],
                 color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
-    plt.savefig(output_dir_gp + '/pairplot.png')
+    plt.savefig(output_dir_matern32 + '/pairplot.png')
 
-    pm.pairplot(trace_gp, varnames=['ln_teff_ln_tE', 'ln_sigma', 'ln_rho', 't0'],
-                divergences=True, plot_transformed=True, text_size=11,
+    pm.pairplot(trace_SHO, 
+                divergences=True, plot_transformed=True, text_size=25,
+                varnames=[rv.name for rv in model_SHO.basic_RVs],
                 color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
-    plt.savefig(output_dir_gp + '/pairplot2.png')
+    plt.savefig(output_dir_SHO + '/pairplot2.png')

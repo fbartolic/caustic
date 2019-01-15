@@ -22,6 +22,7 @@ from exoplanet.utils import eval_in_model
 from Data import OGLEData
 from SingleLensModels import PointSourcePointLens
 from SingleLensModels import PointSourcePointLensMatern32
+from SingleLensModels import PointSourcePointLensSHO
 
 mpl.rc('font',**{'family':'serif','serif':['Palatino']})
 mpl.rc('text', usetex=False)
@@ -196,6 +197,11 @@ def plot_gp_model_and_residuals(ax, event, pm_model, trace, ti_idx,
         fmt='.', color='black', ecolor='#686868')
     ax[1].grid(True)
 
+def plot_traceplots(trace, n_pars, output_dir):
+    fig, ax = plt.subplots(n_pars, 2, figsize=(20, 30))
+    _ = pm.traceplot(trace, ax=ax)
+    plt.savefig(output_dir + '/traceplots.png')
+
 events = [] # event names
 lightcurves = [] # data for each event
 data_path = '/home/star/fb90/data/OGLE_ews/2017/'
@@ -203,17 +209,60 @@ data_path = '/home/star/fb90/data/OGLE_ews/2017/'
 # Iterate over events, load data, and make plots 
 for entry in os.scandir('output'):
     if entry.is_dir():
-        data_dir =  data_path + 'blg-' + entry.name[-4:]
+        data_dir = data_path + 'blg-' + entry.name[-4:]
         event = OGLEData(data_dir)
         print(event.event_name)
 
-        # Plot non-GP models
+        # Load traces
         output_dir = 'output/' + entry.name + '/PointSourcePointLens/' 
+        output_dir_matern32 = 'output/' + entry.name + '/PointSourcePointLensGP/' 
+        output_dir_SHO = 'output/' + entry.name + '/PointSourcePointLensSHO/' 
+
         model_standard = PointSourcePointLens(event, use_joint_prior=True)
+        model_matern32 = PointSourcePointLensMatern32(event, 
+            use_joint_prior=True)
+        model_SHO = PointSourcePointLensSHO(event, 
+            use_joint_prior=True)
 
         with model_standard:
             trace_standard = pm.load_trace(output_dir + 'model.trace') 
         
+        with model_matern32:
+            trace_matern32 = pm.load_trace(output_dir_matern32 + 'model.trace') 
+       
+        with model_SHO:
+            trace_SHO = pm.load_trace(output_dir_SHO + 'model.trace') 
+
+        # Plot traceplots
+        plot_traceplots(trace_standard, 7, output_dir)
+        plot_traceplots(trace_matern32, 11, output_dir_matern32)
+        plot_traceplots(trace_SHO, 10, output_dir_SHO)
+
+        # Plot pairplots
+        print(model_matern32.basic_RVs)
+        rvs = [rv.name for rv in model_standard.basic_RVs]
+
+        pm.pairplot(trace_standard,
+                    divergences=True, plot_transformed=True, text_size=21,
+                    varnames=['DeltaF', 'Fb', 't0', 'ln_teff_ln_tE', 'K'],
+                    color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
+        plt.savefig(output_dir + '/pairplot.png')
+
+        pm.pairplot(trace_matern32, 
+                    divergences=True, plot_transformed=True, text_size=21,
+                    varnames=['DeltaF', 'Fb', 't0', 'ln_teff_ln_tE', 'K', 'sigma',
+                        'rho'],
+                    color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
+        plt.savefig(output_dir_matern32 + '/pairplot.png')
+
+        pm.pairplot(trace_SHO,         
+                    divergences=True, plot_transformed=True, text_size=21,
+                    varnames=['DeltaF', 'Fb', 't0', 'ln_teff_ln_tE', 'K',
+                        'ln_omega0','S0','Q'],
+                    color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
+        plt.savefig(output_dir_SHO + '/pairplot.png')
+#
+        # Plot non-GP models
         fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
              figsize=(25, 10), sharex=True)
         fig.subplots_adjust(hspace=0.05)
@@ -231,38 +280,46 @@ for entry in os.scandir('output'):
         plt.savefig(entry.path + '/PointSourcePointLens' + '/QQ_plot.png')    
 
         # Plot GP models
-        output_dir_gp = 'output/' + entry.name + '/PointSourcePointLensGP/' 
-        model_matern32 = PointSourcePointLensMatern32(event, 
-            use_joint_prior=True)
-
-        with model_matern32:
-            trace_gp = pm.load_trace(output_dir_gp + 'model.trace') 
-
         # Plot GP model for complete lightcurve
         fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
              figsize=(25, 10), sharex=True)
         fig.subplots_adjust(hspace=0.05)
-        plot_gp_model_and_residuals(ax, event, model_matern32, trace_gp, 0,
+        plot_gp_model_and_residuals(ax, event, model_matern32, trace_matern32, 0,
             len(event.df['HJD - 2450000']) - 1)
-        plt.savefig(output_dir_gp + 'model.pdf')
+        plt.savefig(output_dir_matern32 + 'model.pdf')
+
+        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+             figsize=(25, 10), sharex=True)
+        fig.subplots_adjust(hspace=0.05)
+        plot_gp_model_and_residuals(ax, event, model_SHO, trace_SHO, 0,
+            len(event.df['HJD - 2450000']) - 1)
+        plt.savefig(output_dir_SHO + 'model.pdf')
 
         # Plot model for part of the lightcurve 
         fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
              figsize=(25, 10), sharex=True)
         fig.subplots_adjust(hspace=0.05)
-        plot_gp_model_and_residuals(ax, event, model_matern32, trace_gp, 0, 200)
-        plt.savefig(output_dir_gp + 'model_detail.pdf')
+        plot_gp_model_and_residuals(ax, event, model_matern32, trace_matern32, 0, 200)
+        plt.savefig(output_dir_matern32 + 'model_detail.pdf')
+
+        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+             figsize=(25, 10), sharex=True)
+        fig.subplots_adjust(hspace=0.05)
+        plot_gp_model_and_residuals(ax, event, model_SHO, trace_SHO, 0, 200)
+        plt.savefig(output_dir_SHO + 'model_detail.pdf')
 
         # Violin plot for important parameters
         # Seaborn requires that both arrays with posterior samples have the
         # same dimension
         tE_samples = trace_standard['tE']
-        tE_samples_gp = trace_gp['tE']
+        tE_samples_gp = trace_matern32['tE']
+        tE_samples_SHO = trace_SHO['tE']
 
         n = len(tE_samples_gp) - len(tE_samples)
 
-        df = pd.DataFrame(data=np.stack((tE_samples, tE_samples_gp[n:]), axis=1), 
-            columns=["no GP", "GP"])
+        df = pd.DataFrame(data=np.stack((tE_samples, tE_samples_gp[n:],
+            tE_samples_SHO), axis=1), 
+            columns=["no GP", "Matern32", "SHO"])
         
         plt.clf()
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -274,4 +331,4 @@ for entry in os.scandir('output'):
         median_tE = np.median(tE_samples_gp)
         ax.set_ylim(median_tE - 5*sigtE, median_tE + 5*sigtE)
 
-        plt.savefig(output_dir_gp + 'tE_posteriors.pdf')
+        plt.savefig('output/' + entry.name + '/tE_posteriors.pdf')
