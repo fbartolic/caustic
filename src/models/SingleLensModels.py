@@ -65,7 +65,7 @@ class PointSourcePointLens(pm.Model):
 
         # Noise model parameters
         self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
-        
+
         Y_obs = pm.Normal('Y_obs', mu=self.mean_function(), sd=self.K*self.sigF, 
             observed=self.F, shape=len(self.F))
 
@@ -84,6 +84,149 @@ class PointSourcePointLens(pm.Model):
 
         return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
             value[0] + value[1]
+
+class PointSourcePointLensStudentT(pm.Model):
+    #  override __init__ function from pymc3 Model class
+    def __init__(self, data, use_joint_prior=True, name='', model=None):
+        # call super's init first, passing model and name
+        # to it name will be prefix for all variables here if
+        # no name specified for model there will be no prefix
+        super(PointSourcePointLensStudentT, self).__init__(name, model)
+        # now you are in the context of instance,
+        # `modelcontext` will return self you can define
+        # variables in several ways note, that all variables
+        # will get model's name prefix
+
+        # Pre process the data
+        data.convert_data_to_fluxes()
+        df = data.get_standardized_data()
+
+        # Data
+        self.t = df['HJD - 2450000'].values
+        self.F = df['I_flux'].values
+        self.sigF = df['I_flux_err'].values
+
+        # Custom prior distributions 
+        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
+        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+        # Microlensing model parameters
+        self.DeltaF = BoundedNormal('DeltaF', mu=np.max(self.F), sd=1., testval=3.)
+        self.Fb = pm.Normal('Fb', mu=0., sd=0.1, testval=0.)
+        # Posterior is multi-modal in t0 and it's critical that the it is 
+        # initialized near the true value
+        t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
+        self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
+            testval=self.t[t0_guess_idx])
+        if (use_joint_prior==False):
+            self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+            self.tE = BoundedNormal('tE', mu=0., sd=600., testval=20.)
+        else:
+            self.ln_teff_ln_tE = pm.DensityDist('ln_teff_ln_tE', 
+                self.joint_density, shape=2, 
+                testval = [np.log(10), np.log(20.)]) # p(ln_teff,ln_tE)
+
+            # Deterministic transformations
+            self.tE = pm.Deterministic("tE", T.exp(self.ln_teff_ln_tE[1]))
+            self.u0 = pm.Deterministic("u0", 
+                T.exp(self.ln_teff_ln_tE[0])/self.tE) 
+
+        # Noise model parameters
+        self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
+        self.nu = pm.Gamma('nu', 2., 0.1)
+
+        Y_obs = pm.StudentT('Y_obs', nu=self.nu, mu=self.mean_function(), 
+            sd=self.K*self.sigF, observed=self.F, shape=len(self.F))
+
+    def mean_function(self):
+        """PSPL model"""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return self.DeltaF*(A(u) - 1)/(A(self.u0) - 1) + self.Fb
+
+    def joint_density(self, value):
+        teff = T.cast(T.exp(value[0]), 'float64')
+        tE = T.cast(T.exp(value[1]), 'float64')
+        sig_tE = T.cast(365., 'float64') # p(tE)~N(0, 600)
+        sig_u0 = T.cast(1., 'float64') # p(u0)~N(0, 1)
+
+        return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
+            value[0] + value[1]
+
+class PointSourcePointLensRescaling(pm.Model):
+    #  override __init__ function from pymc3 Model class
+    def __init__(self, data, use_joint_prior=True, name='', model=None):
+        # call super's init first, passing model and name
+        # to it name will be prefix for all variables here if
+        # no name specified for model there will be no prefix
+        super(PointSourcePointLensRescaling, self).__init__(name, model)
+        # now you are in the context of instance,
+        # `modelcontext` will return self you can define
+        # variables in several ways note, that all variables
+        # will get model's name prefix
+
+        # Pre process the data
+        data.convert_data_to_fluxes()
+        df = data.get_standardized_data()
+
+        # Data
+        self.t = df['HJD - 2450000'].values
+        self.F = df['I_flux'].values
+        self.sigF = df['I_flux_err'].values
+
+        # Custom prior distributions 
+        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
+        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+        # Microlensing model parameters
+        self.DeltaF = BoundedNormal('DeltaF', mu=np.max(self.F), sd=1., testval=3.)
+        self.Fb = pm.Normal('Fb', mu=0., sd=0.1, testval=0.)
+        # Posterior is multi-modal in t0 and it's critical that the it is 
+        # initialized near the true value
+        t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
+        self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
+            testval=self.t[t0_guess_idx])
+        if (use_joint_prior==False):
+            self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+            self.tE = BoundedNormal('tE', mu=0., sd=600., testval=20.)
+        else:
+            self.ln_teff_ln_tE = pm.DensityDist('ln_teff_ln_tE', 
+                self.joint_density, shape=2, 
+                testval = [np.log(10), np.log(20.)]) # p(ln_teff,ln_tE)
+
+            # Deterministic transformations
+            self.tE = pm.Deterministic("tE", T.exp(self.ln_teff_ln_tE[1]))
+            self.u0 = pm.Deterministic("u0", 
+                T.exp(self.ln_teff_ln_tE[0])/self.tE) 
+
+        # Noise model parameters
+        self.alpha = BoundedNormal1('alpha', mu=1.05, sd=3, testval=1.5)
+        self.K = pm.DensityDist('K', self.prior_for_K, shape=len(self.F),
+            testval = np.random.multivariate_normal(2*np.ones(len(self.F), 
+                0.1*np.ones(len(self.F)))))
+
+        Y_obs = pm.Normal('Y_obs', mu=self.mean_function(), sd=self.K*self.sigF, 
+            observed=self.F, shape=len(self.F))
+
+    def mean_function(self):
+        """PSPL model"""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return self.DeltaF*(A(u) - 1)/(A(self.u0) - 1) + self.Fb
+
+    def joint_density(self, value):
+        teff = T.cast(T.exp(value[0]), 'float64')
+        tE = T.cast(T.exp(value[1]), 'float64')
+        sig_tE = T.cast(365., 'float64') # p(tE)~N(0, 600)
+        sig_u0 = T.cast(1., 'float64') # p(u0)~N(0, 1)
+
+        return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
+            value[0] + value[1]
+
+    def prior_for_K(self, value):
+        return T.log(self.alpha - 1) - self.alpha*T.log(value)
 
 class PointSourcePointLensMatern32(pm.Model):
     def __init__(self, data, use_joint_prior=True, name='', model=None):
@@ -347,7 +490,9 @@ class PointSourcePointLensSHOProduct(pm.Model):
         if (n_terms >= 2):
             self.ln_omega1 = pm.DensityDist('ln_omega1', self.prior_for_ln_omega,
                 testval=3)
-            term2 = terms.SHOTerm(S0=1, Q=1/np.sqrt(2), log_w0=self.ln_omega1)
+            self.S0_1= BoundedNormal('S0_1', mu=0., sd=3., testval=0.5)
+            self.Q_1 = BoundedNormal('Q_1', mu=0., sd=100., testval=1/np.sqrt(2))
+            term2 = terms.SHOTerm(S0=self.S0_1, Q=self.Q_1, log_w0=self.ln_omega1)
             kernel *= term2
 
         if (n_terms >= 3):
@@ -355,6 +500,12 @@ class PointSourcePointLensSHOProduct(pm.Model):
                 testval=3)
             term3 = terms.SHOTerm(S0=1, Q=1/np.sqrt(2), log_w0=self.ln_omega2)
             kernel *= term3
+
+        if (n_terms >= 4):
+            self.ln_omega3 = pm.DensityDist('ln_omega3', self.prior_for_ln_omega,
+                testval=3)
+            term4 = terms.SHOTerm(S0=1, Q=1/np.sqrt(2), log_w0=self.ln_omega3)
+            kernel *= term4
        
         # The exoplanet.gp.GP constructor takes an optional argument J which 
         # specifies the width of the problem if it is known at compile time. 

@@ -3,6 +3,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 from io import StringIO
 import re
+from astropy.coordinates import SkyCoord
+from astropy import units as u
 
 class Data(object):
     """
@@ -14,8 +16,7 @@ class Data(object):
             event_dir = event_dir[:-1]
         self.df = self.load_data(event_dir)
         self.event_name = ""
-        self.RA = ""
-        self.Dec = ""
+        self.coordinates = None
         self.filters = ['']
         self.units = 'magnitudes'
         self.observatory = ''
@@ -153,7 +154,7 @@ class Data(object):
         ax.set_title(self.event_name)
         ax.grid(True)
 
-    def plot_standardized_data(self, ax, mask):
+    def plot_standardized_data(self, ax, mask=None):
         """
         Plots data in standardized modeling format.
         
@@ -171,6 +172,7 @@ class Data(object):
         ax.errorbar(t, F, F_err, fmt='.', color='black', label='Data', 
             ecolor='#686868')
         ax.grid(True)
+        ax.set_title(self.event_name)
         ax.set_xlabel(df.columns[0])
         ax.set_ylabel(df.columns[1])
             
@@ -181,8 +183,10 @@ class OGLEData(Data):
         with open(event_dir + '/params.dat') as f:
             lines = f.readlines() 
             self.event_name = lines[0][:-1]
-            self.RA = lines[4][15:]
-            self.Dec = lines[5][15:]
+            RA = lines[4][15:-1]
+            Dec = lines[5][15:-1]
+            self.coordinates = SkyCoord(RA, Dec, 
+                unit=(u.hourangle, u.deg, u.arcminute))
         self.filters = ['OGLE I band']
         self.observatory = 'OGLE'
 
@@ -195,10 +199,29 @@ class OGLEData(Data):
 
 class MOAData(Data):
     """Subclass of data class for dealing with OGLE data."""
-    def __init__(self, event_path):
+    def __init__(self, event_path, index_path):
         super(MOAData, self).__init__(event_path)
         self.observatory = 'MOA'
         self.units = 'fluxes'
+
+        # Grabbing the event name is anything but trivial
+        with open(event_path) as f:
+            contents = f.readlines()
+            processed = ''
+            for i in range(len(contents)):
+                processed += re.sub("\s+", ",", contents[i].strip()) + '\n' 
+            processed = StringIO(processed)
+            df = pd.read_csv(processed, sep=',', header=None, skiprows=2, nrows=5)
+
+        event_code = df[2].loc[0] + '-' + df[2].loc[1] + '-' + df[2].loc[2] +\
+                '-' + df[2].loc[3]
+
+        # Load index file, find real name of the event
+        index = pd.read_csv(index_path, sep=' ', header=None,
+                usecols=(0, 1,), names=['Name', 'code'])
+            
+        key_value = index[index['code'].str.match(event_code)].iloc[0]
+        self.event_name = 'MOA-' + key_value.iloc[0]
 
     def load_data(self, event_path):
         """Returns dataframe with raw data."""
@@ -213,10 +236,10 @@ class MOAData(Data):
                 usecols=(0, 1, 2), 
                 names=['HJD - 2450000', 'I_flux', 'I_flux_err'])
 
-            # Remove the random value with zero time
-            df = df[df['HJD - 2450000'] != 0]
-
             df['HJD - 2450000'] = df['HJD - 2450000'] - 2450000 
+
+            # Remove the random rows with zero time and negative time
+            df = df[df['HJD - 2450000'] > 0]
 
         return df
 
