@@ -26,7 +26,7 @@ random.seed(42)
 
 events = []  # data for each event
 
-data_path = '/home/star/fb90/data/OGLE_ews/2017/'
+data_path = '/home/fran/data/OGLE_ews/2017/'
 dirs = []
 for directory in os.listdir(data_path):
     dirs.append(directory)

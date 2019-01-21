@@ -24,7 +24,7 @@ from SingleLensModels import PointSourcePointLens
 from SingleLensModels import PointSourcePointLensMatern32
 from SingleLensModels import PointSourcePointLensSHO
 from SingleLensModels import PointSourcePointLensSHOProduct
-from SingleLensModels import PointSourcePointLensRescaling
+from SingleLensModels import PointSourcePointLensStudentT
 
 mpl.rc('font',**{'family':'serif','serif':['Palatino']})
 mpl.rc('text', usetex=False)
@@ -206,7 +206,7 @@ def plot_traceplots(trace, n_pars, output_dir):
 
 events = [] # event names
 lightcurves = [] # data for each event
-data_path = '/home/star/fb90/data/OGLE_ews/2017/'
+data_path = '/home/fran/data/OGLE_ews/2017/'
 
 # Iterate over events, load data, and make plots 
 for entry in os.scandir('output'):
@@ -221,7 +221,7 @@ for entry in os.scandir('output'):
 #        output_dir_SHO = 'output/' + entry.name + '/PointSourcePointLensSHO/' 
 #        output_dir_SHO_product = 'output/' + entry.name +\
 #            '/PointSourcePointLensSHOProduct/' 
-        output_dir_rescaling = 'output/' + entry.name + '/PointSourcePointLensRescaling'
+        output_dir_studentT = 'output/' + entry.name + '/PointSourcePointLensStudenT'
 
         model_standard = PointSourcePointLens(event, use_joint_prior=True)
 #        model_matern32 = PointSourcePointLensMatern32(event, 
@@ -229,7 +229,7 @@ for entry in os.scandir('output'):
 #        model_SHO = PointSourcePointLensSHO(event, use_joint_prior=True)
 #        model_SHO_product = PointSourcePointLensSHOProduct(event, 
 #            use_joint_prior=True)
-        model_standard_rescaling = PointSourcePointLensRescaling(event, use_joint_prior=True)
+        model_standard_studentT = PointSourcePointLensStudentT(event, use_joint_prior=True)
 
         with model_standard:
             trace_standard = pm.load_trace(output_dir + 'model.trace') 
@@ -243,15 +243,15 @@ for entry in os.scandir('output'):
 #        with model_SHO_product:
 #            trace_SHO_product = pm.load_trace(output_dir_SHO_product + 'model.trace') 
         
-        with model_standard_rescaling:
-            trace_standard_rescaling = pm.load_trace(output_dir_rescaling + 'model.trace') 
+        with model_standard_studentT:
+            trace_standard_studentT = pm.load_trace(output_dir_studentT + 'model.trace') 
 
         # Plot traceplots
 #        plot_traceplots(trace_standard, 7, output_dir)
 #        plot_traceplots(trace_matern32, 11, output_dir_matern32)
 #        plot_traceplots(trace_SHO, 10, output_dir_SHO)
 #        plot_traceplots(trace_SHO_product, 10, output_dir_SHO_product)
-        plot_traceplots(trace_standard_rescaling, 8, output_dir_rescaling)
+        plot_traceplots(trace_standard_studentT, 8, output_dir_studentT)
 
         # Plot non-GP models
 #        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
@@ -264,10 +264,9 @@ for entry in os.scandir('output'):
         fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
              figsize=(25, 10), sharex=True)
         fig.subplots_adjust(hspace=0.05)
-        plot_model_and_residuals(ax, event, model_standard_rescaling, trace_standard_rescaling, 0,
+        plot_model_and_residuals(ax, event, model_standard_studentT, trace_standard_studentT, 0,
             len(event.df['HJD - 2450000']) - 1)
         plt.savefig(output_dir + 'model.pdf')
-
 
         # QQ plot 
 #        df = event.get_standardized_data()
@@ -329,14 +328,14 @@ for entry in os.scandir('output'):
         #tE_samples_gp = trace_matern32['tE']
         #tE_samples_SHO = trace_SHO['tE']
         #tE_samples_SHO_product = trace_SHO_product['tE']
-        tE_samples_rescaling = trace_standard_rescaling['tE']
+        tE_samples_studentT = trace_standard_studentT['tE']
 
         #df = pd.DataFrame(data=np.stack((tE_samples, tE_samples_gp[:],
         #    tE_samples_SHO, tE_samples_SHO_product), axis=1), 
         #    columns=["no GP", "Matern32", "SHO", "SHO Product"])
 
         df = pd.DataFrame(data=np.stack((tE_samples,
-            tE_samples_rescaling), axis=1), 
+            tE_samples_studentT), axis=1), 
             columns=["no GP", 'rescaled'])
 
         plt.clf()
