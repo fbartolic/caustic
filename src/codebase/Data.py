@@ -173,7 +173,7 @@ class Data(object):
             ecolor='#686868')
         ax.grid(True)
         ax.set_title(self.event_name)
-        ax.set_xlabel(df.columns[0])
+        ax.set_xlabel('Flux (rescaled)')
         ax.set_ylabel(df.columns[1])
             
 class OGLEData(Data):

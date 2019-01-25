@@ -17,6 +17,56 @@ from scipy.special import gamma
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
 
+
+class PointSourcePointLensClassic(pm.Model):
+    #  override __init__ function from pymc3 Model class
+    def __init__(self, data, use_joint_prior=True, name='', model=None):
+        # call super's init first, passing model and name
+        # to it name will be prefix for all variables here if
+        # no name specified for model there will be no prefix
+        super(PointSourcePointLensClassic, self).__init__(name, model)
+        # now you are in the context of instance,
+        # `modelcontext` will return self you can define
+        # variables in several ways note, that all variables
+        # will get model's name prefix
+
+        # Pre process the data
+        data.convert_data_to_fluxes()
+        df = data.get_standardized_data()
+
+        # Data
+        self.t = df['HJD - 2450000'].values
+        self.F = df['I_flux'].values
+        self.sigF = df['I_flux_err'].values
+
+        # Custom prior distributions 
+        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
+        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+        # Microlensing model parameters
+        self.FS = BoundedNormal('FS', mu=np.max(self.F), sd=5., testval=3.)
+        self.FB = pm.Normal('Fb', mu=0., sd=3, testval=0.)
+        # Posterior is multi-modal in t0 and it's critical that the it is 
+        # initialized near the true value
+        t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
+        self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
+            testval=self.t[t0_guess_idx])
+        self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+        self.tE = BoundedNormal('tE', mu=0., sd=600., testval=20.)
+
+        # Noise model parameters
+        self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
+
+        Y_obs = pm.Normal('Y_obs', mu=self.mean_function(), sd=self.K*self.sigF, 
+            observed=self.F, shape=len(self.F))
+
+    def mean_function(self):
+        """PSPL model"""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return self.FS*A(u)  + self.FB
+
 class PointSourcePointLens(pm.Model):
     #  override __init__ function from pymc3 Model class
     def __init__(self, data, use_joint_prior=True, name='', model=None):
@@ -63,6 +113,10 @@ class PointSourcePointLens(pm.Model):
             self.u0 = pm.Deterministic("u0", 
                 T.exp(self.ln_teff_ln_tE[0])/self.tE) 
 
+        # Save source flux and blend parameters
+        self.FS = pm.Deterministic("FS", self.DeltaF/(self.peak_mag() - 1))
+        self.g = pm.Deterministic("g", (self.Fb - self.FS)/self.FS)
+
         # Noise model parameters
         self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
 
@@ -75,6 +129,13 @@ class PointSourcePointLens(pm.Model):
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
 
         return self.DeltaF*(A(u) - 1)/(A(self.u0) - 1) + self.Fb
+
+    def peak_mag(self):
+        """PSPL model"""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return A(self.u0)
 
     def joint_density(self, value):
         teff = T.cast(T.exp(value[0]), 'float64')
@@ -131,6 +192,10 @@ class PointSourcePointLensStudentT(pm.Model):
             self.u0 = pm.Deterministic("u0", 
                 T.exp(self.ln_teff_ln_tE[0])/self.tE) 
 
+        # Save source flux and blend parameters
+        self.FS = pm.Deterministic("FS", self.DeltaF/(self.peak_mag() - 1))
+        self.g = pm.Deterministic("g", (self.Fb - self.FS)/self.FS)
+
         # Noise model parameters
         self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
         self.nu = pm.Gamma('nu', 2., 0.1)
@@ -144,6 +209,14 @@ class PointSourcePointLensStudentT(pm.Model):
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
 
         return self.DeltaF*(A(u) - 1)/(A(self.u0) - 1) + self.Fb
+
+    def peak_mag(self):
+        """PSPL model"""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return A(self.u0)
+
 
     def joint_density(self, value):
         teff = T.cast(T.exp(value[0]), 'float64')
@@ -200,6 +273,11 @@ class PointSourcePointLensRescaling(pm.Model):
             self.u0 = pm.Deterministic("u0", 
                 T.exp(self.ln_teff_ln_tE[0])/self.tE) 
 
+        # Save source flux and blend parameters
+        self.FS = pm.Deterministic("FS", self.DeltaF/(self.peak_mag() - 1))
+        self.g = pm.Deterministic("g", (self.Fb - self.FS)/self.FS)
+
+
         # Noise model parameters
         self.alpha = BoundedNormal1('alpha', mu=1.05, sd=3, testval=1.5)
         self.K = pm.DensityDist('K', self.prior_for_K, shape=len(self.F),
@@ -215,6 +293,13 @@ class PointSourcePointLensRescaling(pm.Model):
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
 
         return self.DeltaF*(A(u) - 1)/(A(self.u0) - 1) + self.Fb
+
+    def peak_mag(self):
+        """PSPL model"""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return A(self.u0)
 
     def joint_density(self, value):
         teff = T.cast(T.exp(value[0]), 'float64')
@@ -244,7 +329,7 @@ class PointSourcePointLensMatern32(pm.Model):
         # Custom prior distributions 
         # Compute parameters for the prior on GP hyperparameters
         invgamma_a, invgamma_b =  fsolve(self.solve_for_invgamma_params, (0.1, 0.1), 
-        (np.median(np.diff(self.t)), self.t[-1] - self.t[0]))
+        (np.min(np.diff(self.t)), self.t[-1] - self.t[0]))
 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
         BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
@@ -271,13 +356,15 @@ class PointSourcePointLensMatern32(pm.Model):
             self.u0 = pm.Deterministic("u0", 
                 T.exp(self.ln_teff_ln_tE[0])/self.tE) 
 
+        # Save source flux and blend parameters
+        self.FS = pm.Deterministic("FS", self.DeltaF/(self.peak_mag() - 1))
+        self.g = pm.Deterministic("g", (self.Fb - self.FS)/self.FS)
+
         # Noise model parameters
         self.sigma = BoundedNormal('sigma', mu=0., sd=3., testval=0.5)
         self.rho = pm.InverseGamma('rho', alpha=invgamma_a, beta=invgamma_b, 
             testval=3.)
         self.K = BoundedNormal1('K', mu=1.001, sd=2., testval=1.5)
-        self.ln_rho = pm.Deterministic('ln_rho', T.log(self.rho))
-        self.ln_sigma = pm.Deterministic('ln_sigma', T.log(self.sigma))
 
         # Calculate likelihood
         kernel = terms.Matern32Term(sigma=self.sigma, rho=self.rho)
@@ -295,6 +382,13 @@ class PointSourcePointLensMatern32(pm.Model):
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
 
         return self.DeltaF*(A(u) - 1)/(A(self.u0) - 1) + self.Fb
+
+    def peak_mag(self):
+        """PSPL model"""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return A(self.u0)
 
     def joint_density(self, value):
         teff = T.cast(T.exp(value[0]), 'float64')
@@ -337,10 +431,8 @@ class PointSourcePointLensSHO(pm.Model):
 
         # Custom prior distributions 
         # Compute parameters for the prior on GP hyperparameters
-        self.invgamma_a, self.invgamma_b =  fsolve(self.solve_for_invgamma_params,
-            (0.1, 0.1), (np.median(np.diff(self.t)), self.t[-1] - self.t[0]))
-        print(self.invgamma_a)
-        print(self.invgamma_b)
+        invgamma_a, invgamma_b =  fsolve(self.solve_for_invgamma_params, (0.1, 0.1), 
+            (np.min(np.diff(self.t)), self.t[-1] - self.t[0]))
 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
         BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
@@ -367,15 +459,19 @@ class PointSourcePointLensSHO(pm.Model):
             self.u0 = pm.Deterministic("u0", 
                 T.exp(self.ln_teff_ln_tE[0])/self.tE) 
 
+        # Save source flux and blend parameters
+        self.FS = pm.Deterministic("FS", self.DeltaF/(self.peak_mag() - 1))
+        self.g = pm.Deterministic("g", (self.Fb - self.FS)/self.FS)
+
         # Noise model parameters
         self.S0= BoundedNormal('S0', mu=0., sd=3., testval=0.5)
-        self.ln_omega0 = pm.DensityDist('ln_omega0', self.prior_for_ln_omega,
-            testval=3)
+        self.rho = pm.InverseGamma('rho', alpha=invgamma_a, beta=invgamma_b, 
+            testval=3.)
         self.Q = BoundedNormal('Q', mu=0., sd=100., testval=1/np.sqrt(2))
         self.K = BoundedNormal1('K', mu=1.001, sd=2., testval=1.5)
 
         # Calculate likelihood
-        term1 = terms.SHOTerm(S0=self.S0, Q=self.Q, log_w0=self.ln_omega0)
+        term1 = terms.SHOTerm(S0=self.S0, Q=self.Q, w0=2*np.pi/self.rho)
         kernel = term1
         # The exoplanet.gp.GP constructor takes an optional argument J which 
         # specifies the width of the problem if it is known at compile time. 
@@ -392,6 +488,13 @@ class PointSourcePointLensSHO(pm.Model):
 
         return self.DeltaF*(A(u) - 1)/(A(self.u0) - 1) + self.Fb
 
+    def peak_mag(self):
+        """PSPL model"""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return A(self.u0)
+
     def joint_density(self, value):
         teff = T.cast(T.exp(value[0]), 'float64')
         tE = T.cast(T.exp(value[1]), 'float64')
@@ -401,20 +504,6 @@ class PointSourcePointLensSHO(pm.Model):
         return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
             value[0] + value[1]
     
-    def prior_for_ln_omega(self, value):
-        """
-        Custom prior for the ln_omega0 parameter in the SHO kernel (the resonant
-        frequency. The prior is derived from a an Inverse Gamma prior on
-        P0 = 2pi/omega0.
-        """
-        a = self.invgamma_a
-        b = self.invgamma_b
-        omega0 = T.cast(T.exp(value), 'float64')
-        P0 = 2*np.pi/omega0
-        return T.log(2*np.pi) - T.log(omega0) + a*T.log(b) - T.log(gamma(a)) -\
-            (a + 1)*T.log(P0) - b/P0
-        
-
     def solve_for_invgamma_params(self, params, x_min, x_max):
         """Returns parameters of an inverse gamma distribution p(x) such that 
         0.1% of total prob. mass is assigned to values of x < x_min and 
@@ -447,7 +536,7 @@ class PointSourcePointLensSHOProduct(pm.Model):
         # Custom prior distributions 
         # Compute parameters for the prior on GP hyperparameters
         self.invgamma_a, self.invgamma_b =  fsolve(self.solve_for_invgamma_params,
-            (0.1, 0.1), (np.median(np.diff(self.t)), self.t[-1] - self.t[0]))
+            (0.1, 0.1), (np.min(np.diff(self.t)), self.t[-1] - self.t[0]))
         print(self.invgamma_a)
         print(self.invgamma_b)
 
@@ -475,6 +564,11 @@ class PointSourcePointLensSHOProduct(pm.Model):
             self.tE = pm.Deterministic("tE", T.exp(self.ln_teff_ln_tE[1]))
             self.u0 = pm.Deterministic("u0", 
                 T.exp(self.ln_teff_ln_tE[0])/self.tE) 
+
+        # Save source flux and blend parameters
+        self.FS = pm.Deterministic("FS", self.DeltaF/(self.peak_mag() - 1))
+        self.g = pm.Deterministic("g", (self.Fb - self.FS)/self.FS)
+
 
         # Noise model parameters
         self.S0= BoundedNormal('S0', mu=0., sd=3., testval=0.5)
@@ -521,6 +615,13 @@ class PointSourcePointLensSHOProduct(pm.Model):
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
 
         return self.DeltaF*(A(u) - 1)/(A(self.u0) - 1) + self.Fb
+
+    def peak_mag(self):
+        """PSPL model"""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return A(self.u0)
 
     def joint_density(self, value):
         teff = T.cast(T.exp(value[0]), 'float64')
@@ -579,7 +680,7 @@ class ZeroMeanMatern32(pm.Model):
         # Custom prior distributions 
         # Compute parameters for the prior on GP hyperparameters
         invgamma_a, invgamma_b =  fsolve(self.solve_for_invgamma_params, (0.1, 0.1), 
-        (np.median(np.diff(self.t)), self.t[-1] - self.t[0]))
+        (np.min(np.diff(self.t)), self.t[-1] - self.t[0]))
 
 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.) 
@@ -590,8 +691,6 @@ class ZeroMeanMatern32(pm.Model):
         self.rho = pm.InverseGamma('rho', alpha=invgamma_a, beta=invgamma_b, 
             testval=3.)
         self.K = BoundedNormal1('K', mu=1.001, sd=2., testval=1.5)
-        self.ln_rho = pm.Deterministic('ln_rho', T.log(self.rho))
-        self.ln_sigma = pm.Deterministic('ln_sigma', T.log(self.sigma))
 
         # Calculate likelihood
         kernel = terms.Matern32Term(sigma=self.sigma, rho=self.rho)
@@ -632,7 +731,7 @@ class ZeroMeanMatern32StudentT(pm.Model):
         # Custom prior distributions 
         # Compute parameters for the prior on GP hyperparameters
         invgamma_a, invgamma_b =  fsolve(self.solve_for_invgamma_params, (0.1, 0.1), 
-        (np.median(np.diff(self.t)), self.t[-1] - self.t[0]))
+        (np.min(np.diff(self.t)), self.t[-1] - self.t[0]))
 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # DeltaF is positive
         BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
@@ -642,8 +741,6 @@ class ZeroMeanMatern32StudentT(pm.Model):
         self.rho = pm.InverseGamma('rho', alpha=invgamma_a, beta=invgamma_b, 
             testval=3.)
         self.K = BoundedNormal1('K', mu=1.001, sd=2., testval=1.5)
-        self.ln_rho = pm.Deterministic('ln_rho', T.log(self.rho))
-        self.ln_sigma = pm.Deterministic('ln_sigma', T.log(self.sigma))
 
         # Prior for the latent function f which is modelled by a GP
         mu_f = self.F

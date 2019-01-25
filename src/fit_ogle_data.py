@@ -17,6 +17,7 @@ from SingleLensModels import PointSourcePointLens
 from SingleLensModels import PointSourcePointLensSHO
 from SingleLensModels import PointSourcePointLensSHOProduct
 from SingleLensModels import PointSourcePointLensStudentT
+from SingleLensModels import PointSourcePointLensClassic
 from Data import OGLEData
 from exoplanet.gp import terms, GP
 import exoplanet as xo
@@ -26,19 +27,24 @@ random.seed(42)
 
 events = []  # data for each event
 
-data_path = '/home/fran/data/OGLE_ews/2017/'
+data_path = '/home/star/fb90/data/OGLE_ews/2017/'
 dirs = []
 for directory in os.listdir(data_path):
     dirs.append(directory)
 
-random.shuffle(dirs)
-i = 0
-n_events = 50
+#random.shuffle(dirs)
+#i = 0
+#n_events = 50
+#for directory in dirs:
+#    if (i < n_events):
+#        event = OGLEData(data_path + directory)
+#        events.append(event)
+#        i = i + 1
+
+dirs = ['0037', '0569', '1256']
 for directory in dirs:
-    if (i < n_events):
-        event = OGLEData(data_path + directory)
-        events.append(event)
-        i = i + 1
+    event = OGLEData(data_path + 'blg-' + directory)
+    events.append(event)
 
 #event = OGLEData('/home/star/fb90/data/OGLE_ews/2017/blg-1403')
 #events.append(event) 
@@ -53,6 +59,7 @@ for event in events:
     output_dir_SHO_product = 'output/' + event.event_name +\
          '/PointSourcePointLensSHOProduct'
     output_dir_studentT = 'output/' + event.event_name + '/PointSourcePointLensStudentT'
+    output_dir_classic = 'output/' + event.event_name + '/PointSourcePointLensClassic'
 
     if not os.path.exists(output_dir_standard):
         os.makedirs(output_dir_standard)
@@ -64,6 +71,13 @@ for event in events:
         os.makedirs(output_dir_SHO_product)
     if not os.path.exists(output_dir_studentT):
         os.makedirs(output_dir_studentT)
+    if not os.path.exists(output_dir_classic):
+        os.makedirs(output_dir_classic)
+
+    # Plot data and save theplot
+    fig, ax = plt.subplots(figsize=(25, 10))
+    event.plot(ax)
+    plt.savefig('output/' + event.event_name + '/data.pdf')
 
     # Fit a non GP and a GP model
     model1 = PointSourcePointLensMatern32(event, use_joint_prior=True)
@@ -71,8 +85,8 @@ for event in events:
     model3 = PointSourcePointLensSHO(event, use_joint_prior=True)
     #model4 = PointSourcePointLensSHOProduct(event, n_terms=2, 
     #    use_joint_prior=True)
-    
     model5 = PointSourcePointLensStudentT(event, use_joint_prior=True)
+    model6 = PointSourcePointLensClassic(event, use_joint_prior=True)
 
     # Sample models with NUTS
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
@@ -89,6 +103,19 @@ for event in events:
 
     with model_standard:
         trace_standard = sampler.sample(draws=2000)
+
+    print("Sampling model without GP in classic parametrization:")
+    with model6 as model_classic:
+        for RV in model_classic.basic_RVs:
+            print(RV.name, RV.logp(model_classic.test_point))
+
+    with model_classic:
+        burnin = sampler.tune(tune=3000,
+                              step_kwargs=dict(target_accept=0.95))
+
+    with model_classic:
+        trace_classic= sampler.sample(draws=2000)
+
 
     # Sample StudentT model
     print("Sampling StudentT model:")
@@ -162,6 +189,8 @@ for event in events:
 #        overwrite=True)
     pm.save_trace(trace_studentT, output_dir_studentT + '/model.trace',
         overwrite=True)
+    pm.save_trace(trace_classic, output_dir_classic + '/model.trace',
+        overwrite=True)
 
     # Save output stats to file
     def save_summary_stats(trace, output_dir):
@@ -174,6 +203,7 @@ for event in events:
     save_summary_stats(trace_SHO, output_dir_SHO)
     #save_summary_stats(trace_SHO_product, output_dir_SHO_product)
     save_summary_stats(trace_studentT, output_dir_studentT)
+    save_summary_stats(trace_classic, output_dir_classic)
 
     # Display the total number and percentage of divergent
     def save_divergences_stats(trace, output_dir):
@@ -189,6 +219,7 @@ for event in events:
     save_divergences_stats(trace_SHO, output_dir_SHO)
 #    save_divergences_stats(trace_SHO_product, output_dir_SHO_product)
     save_divergences_stats(trace_studentT, output_dir_studentT)
+    save_divergences_stats(trace_classic, output_dir_classic)
 
     rvs = [rv.name for rv in model_standard.basic_RVs]
     pm.pairplot(trace_standard,
@@ -221,3 +252,11 @@ for event in events:
                 varnames=rvs[:-1],
                 color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
     plt.savefig(output_dir_studentT + '/pairplot.png')
+
+    rvs = [rv.name for rv in model_classic.basic_RVs]
+    pm.pairplot(trace_classic,
+                divergences=True, plot_transformed=True, text_size=25,
+                varnames=rvs[:-1],
+                color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
+    plt.savefig(output_dir_classic + '/pairplot.png')
+
