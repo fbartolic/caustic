@@ -222,7 +222,7 @@ def plot_gp_model_and_residuals(ax, event, pm_model, trace, ti_idx,
     df = event.get_standardized_data()
     time = df['HJD - 2450000'].values
 
-    t_grid = np.linspace(time[ti_idx], time[tf_idx], 1000)
+    t_grid = np.linspace(time[ti_idx], time[tf_idx], 800)
     t = time[ti_idx:tf_idx]
 
     predictions = evaluate_gp_model_on_grid(event, pm_model, trace,
@@ -231,6 +231,7 @@ def plot_gp_model_and_residuals(ax, event, pm_model, trace, ti_idx,
     mask = ((time >= time[ti_idx]) & (time <= time[tf_idx]))
     event.plot_standardized_data(ax[0], mask)
     ax[0].set_xlabel(None)
+    ax[0].set_ylabel('Flux (rescaled)')
 
     for i in range(N_pred):
         ax[0].plot(t_grid, predictions[i, :], color='C1', alpha=0.2)
@@ -242,6 +243,7 @@ def plot_gp_model_and_residuals(ax, event, pm_model, trace, ti_idx,
     ax[1].errorbar(t, residuals, df['I_flux_err'].values[ti_idx:tf_idx], 
         fmt='.', color='black', ecolor='#686868')
     ax[1].grid(True)
+    ax[1].set_xlabel('HJD - 2450000')
 
 def plot_centered_gp_model_and_residuals(ax, event, pm_model, trace):
     N_pred = 50
@@ -293,86 +295,112 @@ def violin_plot(ax, traces, parameter_name, column_names):
 
     ax = sns.violinplot(data=df)
     ax.set_xlabel('Model')
-    ax.set_ylabel(parameter_name)
+    ax.set_ylabel('tE [days]')
     ax.grid(True)
+    ax.set_ylim(0, 150)
+
+def plot_lomb_scargle_periodogram(ax, event, pm_model, trace):
+    # Plot residuals
+    df = event.get_standardized_data()
+    t = df['HJD - 2450000'].values
+    residuals = df['I_flux'].values -\
+        evaluate_median_model_on_grid(event, pm_model, trace, t)
+    results = xo.estimators.lomb_scargle_estimator(
+        t, residuals, max_peaks=1, min_period=1.0, max_period=300.0,
+        samples_per_peak=50)
+
+    peak = results["peaks"][0]
+    freq, power = results["periodogram"]
+    ax.plot(-np.log10(freq), power, "k")
+    ax.set_xlim((-np.log10(freq)).min(), (-np.log10(freq)).max())
+    ax.set_yticks([])
+    ax.set_xlabel("log10(period)")
+    ax.set_ylabel("power");
+
+def plot_acf(ax, event, pm_model, trace):
+    # Plot residuals
+    df = event.get_standardized_data()
+    t = df['HJD - 2450000'].values
+    residuals = df['I_flux'].values -\
+        evaluate_median_model_on_grid(event, pm_model, trace, t)
+    res = xo.autocorr_estimator()
+
 
 events = [] # event names
 lightcurves = [] # data for each event
-data_path = '/home/star/fb90/data/OGLE_ews/2017/'
+data_path = '/home/fran/data/OGLE_ews/2017/'
 
-interesting_events = ['0037', '0569', '1256']
-
-## Iterate over events, load data, and make plots 
-#for entry in os.scandir('output'):
-#    if entry.is_dir():
-#        data_dir = data_path + 'blg-' + event.event_name[-4:]
+# Iterate over events, load data, and make plots 
+for entry in os.scandir('output'):
+    if entry.is_dir():
+        data_dir = data_path + 'blg-' + event.event_name[-4:]
 for event_name in interesting_events:
-        data_dir = data_path + 'blg-' + event_name
-        event = OGLEData(data_dir)
-        print(event.event_name)
+    data_dir = data_path + 'blg-' + event_name
+    event = OGLEData(data_dir)
+    print(event.event_name)
 
-        # Load traces
-        output_dir = 'output/' + event.event_name + '/PointSourcePointLens/' 
-        output_dir_matern32 = 'output/' + event.event_name + '/PointSourcePointLensGP/' 
-        output_dir_SHO = 'output/' + event.event_name + '/PointSourcePointLensSHO/' 
+    # Load traces
+    output_dir = 'output/' + event.event_name + '/PointSourcePointLens/' 
+    output_dir_matern32 = 'output/' + event.event_name + '/PointSourcePointLensGP/' 
+    output_dir_SHO = 'output/' + event.event_name + '/PointSourcePointLensSHO/' 
 #        output_dir_SHO_product = 'output/' + event.event_name +\
 #            '/PointSourcePointLensSHOProduct/' 
-#        output_dir_studentT = 'output/' + event.event_name + '/PointSourcePointLensStudentT'
+    output_dir_studentT = 'output/' + event.event_name + '/PointSourcePointLensStudentT'
 
-        model_standard = PointSourcePointLens(event, use_joint_prior=True)
-        model_matern32 = PointSourcePointLensMatern32(event, 
-            use_joint_prior=True)
-        model_SHO = PointSourcePointLensSHO(event, use_joint_prior=True)
+    model_standard = PointSourcePointLens(event, use_joint_prior=True)
+    model_matern32 = PointSourcePointLensMatern32(event, 
+        use_joint_prior=True)
+    model_SHO = PointSourcePointLensSHO(event, use_joint_prior=True)
 #        model_SHO_product = PointSourcePointLensSHOProduct(event, 
 #            use_joint_prior=True)
-#        model_studentT = PointSourcePointLensStudentT(event, use_joint_prior=True)
+#    model_studentT = PointSourcePointLensStudentT(event, use_joint_prior=True)
 
-        with model_standard:
-            trace_standard = pm.load_trace(output_dir + 'model.trace') 
-        
-        with model_matern32:
-            trace_matern32 = pm.load_trace(output_dir_matern32 + 'model.trace') 
+    with model_standard:
+        trace_standard = pm.load_trace(output_dir + 'model.trace') 
+    
+    with model_matern32:
+        trace_matern32 = pm.load_trace(output_dir_matern32 + 'model.trace') 
 
-        with model_SHO:
-            trace_SHO = pm.load_trace(output_dir_SHO + 'model.trace') 
+    with model_SHO:
+        trace_SHO = pm.load_trace(output_dir_SHO + 'model.trace') 
 #        
 #        with model_SHO_product:
 #            trace_SHO_product = pm.load_trace(output_dir_SHO_product + 'model.trace') 
-        
-#        with model_studentT:
-#            trace_studentT = pm.load_trace(output_dir_studentT + 'model.trace') 
+    
+#    with model_studentT:
+#        trace_studentT = pm.load_trace(output_dir_studentT + 'model.trace') 
 
-        # Plot traceplots
-        plot_traceplots(trace_standard, 9, output_dir)
-        plot_traceplots(trace_matern32, 11, output_dir_matern32)
-        plot_traceplots(trace_SHO, 12, output_dir_SHO)
-#        plot_traceplots(trace_SHO_product, 10, output_dir_SHO_product)
-#        plot_traceplots(trace_studentT, 8, output_dir_studentT)
+    # Plot traceplots
+    plot_traceplots(trace_standard, 9, output_dir)
+    plot_traceplots(trace_matern32, 11, output_dir_matern32)
+    plot_traceplots(trace_SHO, 12, output_dir_SHO)
+#    plot_traceplots(trace_SHO_product, 10, output_dir_SHO_product)
+    #plot_traceplots(trace_studentT, 8, output_dir_studentT)
 
-        # Plot non-GP models
-        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-             figsize=(25, 10), sharex=True)
-        fig.subplots_adjust(hspace=0.05)
-        plot_model_and_residuals(ax, event, model_standard, trace_standard, 0,
-            len(event.df['HJD - 2450000']) - 1)
-        plt.savefig(output_dir + 'model.png')
+    # Plot non-GP models
+    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+            figsize=(25, 10), sharex=True)
+    fig.subplots_adjust(hspace=0.05)
+    plot_model_and_residuals(ax, event, model_standard, trace_standard, 0,
+        len(event.df['HJD - 2450000']) - 1)
+    plt.savefig(output_dir + 'model.png')
 
-#        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-#             figsize=(25, 10), sharex=True)
-#        fig.subplots_adjust(hspace=0.05)
-#        plot_model_and_residuals(ax, event, model_studentT, 
-#            trace_studentT, 0,
-#            len(event.df['HJD - 2450000']) - 1)
-#        plt.savefig(output_dir + 'model.png')
+#    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+#            figsize=(25, 10), sharex=True)
+#    fig.subplots_adjust(hspace=0.05)
+#    plot_model_and_residuals(ax, event, model_studentT, 
+#        trace_studentT, 0,
+#        len(event.df['HJD - 2450000']) - 1)
+#    plt.savefig(output_dir + 'model.png')
 
-        # Plot mock data
-        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-             figsize=(25, 10), sharex=True)
-        fig.subplots_adjust(hspace=0.05)
-        plot_mock_model(ax, event, model_standard, trace_standard)
-        plt.savefig(output_dir + 'mock_data.png')
+    # Plot mock data
+    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+            figsize=(25, 10), sharex=True)
+    fig.subplots_adjust(hspace=0.05)
+    plot_mock_model(ax, event, model_standard, trace_standard)
+    plt.savefig(output_dir + 'mock_data.png')
 
-        # QQ plot 
+    # QQ plot 
 #        df = event.get_standardized_data()
 #        residuals = df['I_flux'].values -\
 #            evaluate_median_model_on_grid(event, model_standard, 
@@ -381,88 +409,91 @@ for event_name in interesting_events:
 #        qq_plot(ax, residuals)
 #        plt.savefig(entry.path + '/PointSourcePointLens' + '/QQ_plot.png')    
 
-        # Plot GP models
-        # Plot GP model for complete lightcurve
-        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-             figsize=(25, 10), sharex=True)
-        fig.subplots_adjust(hspace=0.05)
-        plot_gp_model_and_residuals(ax, event, model_matern32, trace_matern32, 0,
-            len(event.df['HJD - 2450000']) - 1)
-        plt.savefig(output_dir_matern32 + 'model.png')
+    # Plot LS periodogram
+#    fig, ax = plt.subplots(figsize=(10, 10)) 
+#    plot_lomb_scargle_periodogram(ax, event, model_standard, trace_standard)
+#    plt.savefig(output_dir + 'LS_periodogram.png')
 
-        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-             figsize=(25, 10), sharex=True)
-        fig.subplots_adjust(hspace=0.05)
-        plot_gp_model_and_residuals(ax, event, model_SHO, trace_SHO, 0,
-            len(event.df['HJD - 2450000']) - 1)
-        plt.savefig(output_dir_SHO + 'model.png')
-#
-#        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-#             figsize=(25, 10), sharex=True)
-#        fig.subplots_adjust(hspace=0.05)
-#        plot_gp_model_and_residuals(ax, event, model_SHO_product, 
-#            trace_SHO_product, 0, len(event.df['HJD - 2450000']) - 1)
-#        plt.savefig(output_dir_SHO_product + 'model.png')
-#
-        # Plot model for part of the lightcurve 
-        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-             figsize=(25, 10), sharex=True)
-        fig.subplots_adjust(hspace=0.05)
-        plot_gp_model_and_residuals(ax, event, model_matern32, trace_matern32, 0, 200)
-        plt.savefig(output_dir_matern32 + 'model_detail.png')
+    # Plot GP models
+    # Plot GP model for complete lightcurve
+    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+            figsize=(25, 10), sharex=True)
+    fig.subplots_adjust(hspace=0.05)
+    plot_gp_model_and_residuals(ax, event, model_matern32, trace_matern32, 0,
+        len(event.df['HJD - 2450000']) - 1)
+    plt.savefig(output_dir_matern32 + 'model.png')
 
-        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-             figsize=(25, 10), sharex=True)
-        fig.subplots_adjust(hspace=0.05)
-        plot_gp_model_and_residuals(ax, event, model_SHO, trace_SHO, 0, 200)
-        plt.savefig(output_dir_SHO + 'model_detail.png')
+    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+            figsize=(25, 10), sharex=True)
+    fig.subplots_adjust(hspace=0.05)
+    plot_gp_model_and_residuals(ax, event, model_SHO, trace_SHO, 0,
+        len(event.df['HJD - 2450000']) - 1)
+    plt.savefig(output_dir_SHO + 'model.png')
 
-        # Plot model centered at t0
-        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-             figsize=(25, 10), sharex=True)
-        fig.subplots_adjust(hspace=0.05)
-        plot_centered_gp_model_and_residuals(ax, event, model_matern32, trace_matern32)
-        plt.savefig(output_dir_matern32 + 'model_centered.png')
+#    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+#            figsize=(25, 10), sharex=True)
+#    fig.subplots_adjust(hspace=0.05)
+#    plot_gp_model_and_residuals(ax, event, model_SHO_product, 
+#        trace_SHO_product, 0, len(event.df['HJD - 2450000']) - 1)
+#    plt.savefig(output_dir_SHO_product + 'model.png')
 
-        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-             figsize=(25, 10), sharex=True)
-        fig.subplots_adjust(hspace=0.05)
-        plot_centered_gp_model_and_residuals(ax, event, model_SHO, trace_SHO)
-        plt.savefig(output_dir_SHO + 'model_centered.png')
+    # Plot model for part of the lightcurve 
+    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+            figsize=(25, 10), sharex=True)
+    fig.subplots_adjust(hspace=0.05)
+    plot_gp_model_and_residuals(ax, event, model_matern32, trace_matern32, 0, 200)
+    plt.savefig(output_dir_matern32 + 'model_detail.png')
 
-#        fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-#             figsize=(25, 10), sharex=True)
-#        fig.subplots_adjust(hspace=0.05)
-#        plot_gp_model_and_residuals(ax, event, model_SHO_product,
-#            trace_SHO_product, 0, 200)
-#        plt.savefig(output_dir_SHO_product + 'model_detail.png')
-#
-#
-        # Violin plot for important parameters
-        # Seaborn requires that both arrays with posterior samples have the
-        # same dimension
+    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+            figsize=(25, 10), sharex=True)
+    fig.subplots_adjust(hspace=0.05)
+    plot_gp_model_and_residuals(ax, event, model_SHO, trace_SHO, 0, 200)
+    plt.savefig(output_dir_SHO + 'model_detail.png')
 
-        # Plot posteriors for important parameters
-        plt.clf()
-        fig, ax = plt.subplots(figsize=(8, 6))
-        traces = (trace_standard['tE'], trace_matern32['tE'], trace_SHO['tE'])
-        violin_plot(ax, traces, 'tE',
-            column_names=["no GP", "Matern32", "SHO"])
-        ax.set_ylim(bottom=0)
-        plt.savefig('output/' + event.event_name + '/tE_posteriors.png')
+    # Plot model centered at t0
+    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+            figsize=(25, 10), sharex=True)
+    fig.subplots_adjust(hspace=0.05)
+    plot_centered_gp_model_and_residuals(ax, event, model_matern32, trace_matern32)
+    plt.savefig(output_dir_matern32 + 'model_centered.png')
 
-        fig, ax = plt.subplots(figsize=(8, 6))
-        traces = (trace_standard['FS'], trace_matern32['FS'], trace_SHO['FS'])
-        violin_plot(ax, traces, 'FS',
-            column_names=["no GP", "Matern32", "SHO"])
-        ax.set_ylim(bottom=0)
-        plt.savefig('output/' + event.event_name + '/FS_posteriors.png')
+    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+            figsize=(25, 10), sharex=True)
+    fig.subplots_adjust(hspace=0.05)
+    plot_centered_gp_model_and_residuals(ax, event, model_SHO, trace_SHO)
+    plt.savefig(output_dir_SHO + 'model_centered.png')
 
-        fig, ax = plt.subplots(figsize=(8, 6))
-        traces = (trace_standard['g'], trace_matern32['g'], trace_SHO['g'])
-        violin_plot(ax, traces, 'FS',
-            column_names=["no GP", "Matern32", "SHO"])
-        ax.set_ylim(bottom=0)
-        plt.savefig('output/' + event.event_name + '/g_posteriors.png')
+#    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+#            figsize=(25, 10), sharex=True)
+#    fig.subplots_adjust(hspace=0.05)
+#    plot_gp_model_and_residuals(ax, event, model_SHO_product,
+#        trace_SHO_product, 0, 200)
+#    plt.savefig(output_dir_SHO_product + 'model_detail.png')
 
-        # Plot mock lightcurve with white noise
+
+    # Violin plot for important parameters
+    # Seaborn requires that both arrays with posterior samples have the
+    # same dimension
+
+    # Plot posteriors for important parameters
+    plt.clf()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    traces = (trace_standard['tE'], trace_matern32['tE'], trace_SHO['tE'])
+    violin_plot(ax, traces, 'tE',
+        column_names=["White noise", "Matern32 kernel", "SHO kernel"])
+    ax.set_ylim(bottom=0)
+    plt.savefig('output/' + event.event_name + '/tE_posteriors.png')
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    traces = (trace_standard['m_source'], trace_matern32['m_source'],
+        trace_SHO['m_source'])
+    violin_plot(ax, traces, 'FS',
+        column_names=["White noise", "Matern32 kernel", "SHO kernel"])
+    plt.savefig('output/' + event.event_name + '/m_source_posteriors.png')
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    traces = (trace_standard['m_blend'], trace_matern32['m_blend'], 
+        trace_SHO['m_blend'])
+    violin_plot(ax, traces, 'm_blend',
+        column_names=["White noise", "Matern32 kernel", "SHO kernel"])
+    plt.savefig('output/' + event.event_name + '/blend_posteriors.png')
