@@ -5,20 +5,16 @@ import matplotlib as mpl
 import seaborn as sns
 import os, random
 import sys
-
-sys.path.append("models")
-sys.path.append("codebase")
-from SingleLensModels import PointSourcePointLens
-from Data import OGLEData
 import exoplanet as xo
 
-mpl.rc('text', usetex=False)
+from models import PointSourcePointLens
+from data import OGLEData
 
 random.seed(42)
 
 events = []  # data for each event
 
-data_path = '/home/fran/data/OGLE_ews/2017/'
+data_path = '/home/star/fb90/data/OGLE_ews/2017/'
 dirs = []
 for directory in os.listdir(data_path):
     dirs.append(directory)
@@ -52,20 +48,23 @@ for event in events:
     # Sample models with NUTS
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
 
-    print("Sampling model:")
     with model1 as model_standard:
-        for RV in model_standard.basic_RVs:
-            print(RV.name, RV.logp(model_standard.test_point))
+        print("Free parameters: ", model_standard.free_parameters)
+        print("Initial values of logp for each parameter: ", 
+            model_standard.initial_logps)
 
     with model_standard:
-        burnin = sampler.tune(tune=500)
+        burnin = sampler.tune(tune=2000,
+            step_kwargs=dict(target_accept=0.9))
 
     with model_standard:
-        trace_standard = sampler.sample(draws=1000)
+        trace_standard = sampler.sample(draws=2000)
 
-    # Trace in dataframe format
-    df = pm.trace_to_dataframe(trace_standard)
-    df.to_csv(output_dir_standard + '/data.csv',)
+    # Save trace to file
+    pm.save_trace(trace_standard, output_dir_standard + '/model.trace',
+        overwrite=True)
+    df = pm.trace_to_dataframe(trace_standard) 
+    df.to_csv(output_dir_standard + '/trace.csv',)
 
     # Save output stats to file
     def save_summary_stats(trace, output_dir):
@@ -75,7 +74,7 @@ for event in events:
 
     save_summary_stats(trace_standard, output_dir_standard)
 
-    # Display the total number and percentage of divergent
+    # Save stats about divergent samples 
     def save_divergences_stats(trace, output_dir):
         with open(output_dir + "/divergences.txt", "w") as text_file:
             divergent = trace['diverging']
@@ -86,6 +85,7 @@ for event in events:
 
     save_divergences_stats(trace_standard, output_dir_standard)
 
+    # Save corner plot of the samples
     rvs = [rv.name for rv in model_standard.basic_RVs]
     pm.pairplot(trace_standard,
                 divergences=True, plot_transformed=True, text_size=25,
