@@ -41,6 +41,7 @@ class PointSourcePointLens(pm.Model):
         # Define model parameters and their associated priors
         self.Delta_F = BoundedNormal('Delta_F', mu=np.max(self.F), sd=1., testval=3.)
         self.F_base = pm.Normal('F_base', mu=0., sd=0.1, testval=0.)
+
         ## Posterior is multi-modal in t0 and it's critical that the it is 
         ## initialized near the true value
         t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
@@ -51,7 +52,7 @@ class PointSourcePointLens(pm.Model):
             self.tE = BoundedNormal('tE', mu=0., sd=600., testval=20.)
         else:
             self.ln_teff_ln_tE = pm.DensityDist('ln_teff_ln_tE', 
-                self.prior_Delta_F_F_base, shape=2, 
+                self.prior_ln_teff_ln_tE, shape=2, 
                 testval = [np.log(10), np.log(20.)]) # p(ln_teff,ln_tE)
 
             # Deterministic transformations
@@ -77,10 +78,8 @@ class PointSourcePointLens(pm.Model):
             pm.Normal.dist(mu=0., sd=0.1).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
             pm.Uniform.dist(self.t[0], self.t[-1]).logp(self.t0))
-        self.logp_u0 = pm.Deterministic('logp_u0',
-            BoundedNormal.dist(mu=0., sd=1.).logp(self.u0))
-        self.logp_tE = pm.Deterministic('logp_tE',
-            BoundedNormal.dist(mu=0., sd=600.).logp(self.tE))
+        self.logp_ln_teff_ln_tE= pm.Deterministic('logp_ln', 
+            self.prior_ln_teff_ln_tE(self.ln_teff_ln_tE))
         self.logp_K = pm.Deterministic('logp_K',
             BoundedNormal1.dist( mu=1., sd=2.).logp(self.K))
         self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
@@ -100,7 +99,7 @@ class PointSourcePointLens(pm.Model):
 
         return self.Delta_F*(A(u) - 1)/(A(self.u0) - 1) + self.F_base
 
-    def prior_Delta_F_F_base(self, value):
+    def prior_ln_teff_ln_tE(self, value):
         """Returns the log of a custom joint prior p(ln_Delta_F, ln_F_base)."""
         teff = T.cast(T.exp(value[0]), 'float64')
         tE = T.cast(T.exp(value[1]), 'float64')
@@ -135,3 +134,114 @@ class PointSourcePointLens(pm.Model):
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
 
         return A(self.u0)
+
+class PointSourcePointLensMarginalized(pm.Model):
+    def __init__(self, data, use_joint_prior=True, name='', model=None):
+        super(PointSourcePointLensMarginalized, self).__init__(name, model)
+
+        # Load and pre-process the data 
+        data.convert_data_to_fluxes()
+        df = data.get_standardized_data()
+        self.t = df['HJD - 2450000'].values
+        self.F = df['I_flux'].values
+        self.sigF = df['I_flux_err'].values
+
+        # Define custom prior distributions 
+        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
+        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+        # Define model parameters and their associated priors
+        ## Posterior is multi-modal in t0 and it's critical that the it is 
+        ## initialized near the true value
+        t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
+        self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
+            testval=self.t[t0_guess_idx])
+        if (use_joint_prior==False):
+            self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+            self.tE = BoundedNormal('tE', mu=0., sd=600., testval=20.)
+        else:
+            self.ln_teff_ln_tE = pm.DensityDist('ln_teff_ln_tE', 
+                self.prior_ln_teff_ln_tE, shape=2, 
+                testval = [np.log(10), np.log(20.)]) # p(ln_teff,ln_tE)
+
+            # Deterministic transformations
+            self.tE = pm.Deterministic("tE", T.exp(self.ln_teff_ln_tE[1]))
+            self.u0 = pm.Deterministic("u0", 
+                T.exp(self.ln_teff_ln_tE[0])/self.tE) 
+
+        # Noise model parameters
+        self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
+
+        # Save log prior for each parameter, this is needed for hierarchical
+        # modeling of multiple events using the importance resampling trick
+        self.logp_t0 = pm.Deterministic('logp_t0',
+            pm.Uniform.dist(self.t[0], self.t[-1]).logp(self.t0))
+        self.logp_ln_teff_ln_tE= pm.Deterministic('logp_ln', 
+            self.prior_ln_teff_ln_tE(self.ln_teff_ln_tE))
+        self.logp_K = pm.Deterministic('logp_K',
+            BoundedNormal1.dist( mu=1., sd=2.).logp(self.K))
+        self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
+
+        # Define helpful class attributes
+        self.free_parameters = [RV.name for RV in self.basic_RVs]
+        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+
+        # Define the likelihood function~
+        pm.Potential('likelihood', self.marginalized_likelihood())
+
+    def marginalized_likelihood(self):
+        """Gaussian likelihood funciton marginalized over the linear parameters.
+        """
+        N = len(self.F)        
+        F = T._shared(self.F)
+
+        # Linear parameter matrix
+        mag_vector = self.magnification()
+#        mu_theta = T.dot(mag_vector, np.max(self.F))
+        A = T.stack([mag_vector, T.ones(N)], axis=1)
+
+        # Covariance matrix
+        C_diag = T.pow(self.K*T._shared(self.sigF), 2.)
+        C = T.nlinalg.diag(C_diag)
+
+        # Prior matrix
+        sigDelta_F = 10.
+        sigF_base = 0.1
+        L_diag = T._shared(np.array([sigDelta_F, sigF_base])**2.)
+        L = T.nlinalg.diag(L_diag)
+
+        # Calculate inverse of covariance matrix for marginalized likelihood
+        inv_C = T.nlinalg.diag(T.pow(C_diag, -1.))
+        inv_L = T.nlinalg.diag(T.pow(L_diag, -1.))
+        term1 = T.dot(A.transpose(), inv_C) 
+        term2 = inv_L + T.dot(A.transpose(), T.dot(inv_C, A))
+        term3 = T.dot(inv_C, A)
+        inv_SIGMA = inv_C - T.dot(term3, T.dot(T.nlinalg.matrix_inverse(term2),
+             term1))
+
+        # Calculate determinant of covariance matrix for marginalized likelihood
+        det_C = C_diag.prod() 
+        det_L = L_diag.prod() 
+        det_SIGMA = det_C*det_L*T.nlinalg.det(term2)
+
+        # Calculate marginalized likelihood
+        r = F #- mu_theta
+        return -0.5*T.dot(r.transpose(), T.dot(inv_SIGMA, r)) -\
+               0.5*N*np.log(2*np.pi) - 0.5*np.log(det_SIGMA)
+
+    def magnification(self):
+        """Return the mean function which goes into the likeliood."""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return (A(u) - 1)/(A(self.u0) - 1) 
+
+    def prior_ln_teff_ln_tE(self, value):
+        """Returns the log of a custom joint prior p(ln_teff, ln_tE)."""
+        teff = T.cast(T.exp(value[0]), 'float64')
+        tE = T.cast(T.exp(value[1]), 'float64')
+        sig_tE = T.cast(365., 'float64') # p(tE)~N(0, 600)
+        sig_u0 = T.cast(1., 'float64') # p(u0)~N(0, 1)
+
+        return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
+            value[0] + value[1]
