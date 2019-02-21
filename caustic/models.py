@@ -17,7 +17,7 @@ from scipy.optimize import fsolve
 
 class PointSourcePointLens(pm.Model):
     #  override __init__ function from pymc3 Model class
-    def __init__(self, data, use_joint_prior=True, name='', model=None):
+    def __init__(self, data, name='', model=None):
         # call super's init first, passing model and name
         # to it name will be prefix for all variables here if
         # no name specified for model there will be no prefix
@@ -47,18 +47,11 @@ class PointSourcePointLens(pm.Model):
         t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
         self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
             testval=self.t[t0_guess_idx])
-        if (use_joint_prior==False):
-            self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
-            self.tE = BoundedNormal('tE', mu=0., sd=600., testval=20.)
-        else:
-            self.ln_teff_ln_tE = pm.DensityDist('ln_teff_ln_tE', 
-                self.prior_ln_teff_ln_tE, shape=2, 
-                testval = [np.log(10), np.log(20.)]) # p(ln_teff,ln_tE)
-
-            # Deterministic transformations
-            self.tE = pm.Deterministic("tE", T.exp(self.ln_teff_ln_tE[1]))
-            self.u0 = pm.Deterministic("u0", 
-                T.exp(self.ln_teff_ln_tE[0])/self.tE) 
+        self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
+        
+        # Deterministic transformations
+        self.tE = pm.Deterministic("tE", self.teff/self.u0) 
 
         # Transform (Delta_F,F_basease) to (m_S,m_blend) using deterministic 
         # mapping and save to trace
@@ -78,8 +71,10 @@ class PointSourcePointLens(pm.Model):
             pm.Normal.dist(mu=0., sd=0.1).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
             pm.Uniform.dist(self.t[0], self.t[-1]).logp(self.t0))
-        self.logp_ln_teff_ln_tE= pm.Deterministic('logp_ln', 
-            self.prior_ln_teff_ln_tE(self.ln_teff_ln_tE))
+        self.logp_u0 = pm.Deterministic('logp_u0', 
+            BoundedNormal.dist(mu=0., sd=1.).logp(self.u0))
+        self.logp_teff = pm.Deterministic('logp_teff', 
+            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
         self.logp_K = pm.Deterministic('logp_K',
             BoundedNormal1.dist( mu=1., sd=2.).logp(self.K))
         self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
@@ -98,16 +93,6 @@ class PointSourcePointLens(pm.Model):
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
 
         return self.Delta_F*(A(u) - 1)/(A(self.u0) - 1) + self.F_base
-
-    def prior_ln_teff_ln_tE(self, value):
-        """Returns the log of a custom joint prior p(ln_Delta_F, ln_F_base)."""
-        teff = T.cast(T.exp(value[0]), 'float64')
-        tE = T.cast(T.exp(value[1]), 'float64')
-        sig_tE = T.cast(365., 'float64') # p(tE)~N(0, 600)
-        sig_u0 = T.cast(1., 'float64') # p(u0)~N(0, 1)
-
-        return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
-            value[0] + value[1]
 
     def revert_flux_params_to_nonstandardized_format(self, data):
         # Revert F_base and Delta_F to non-standardized units
@@ -136,7 +121,7 @@ class PointSourcePointLens(pm.Model):
         return A(self.u0)
 
 class PointSourcePointLensMarginalized(pm.Model):
-    def __init__(self, data, use_joint_prior=True, name='', model=None):
+    def __init__(self, data, name='', model=None):
         super(PointSourcePointLensMarginalized, self).__init__(name, model)
 
         # Load and pre-process the data 
@@ -156,18 +141,11 @@ class PointSourcePointLensMarginalized(pm.Model):
         t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
         self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
             testval=self.t[t0_guess_idx])
-        if (use_joint_prior==False):
-            self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
-            self.tE = BoundedNormal('tE', mu=0., sd=600., testval=20.)
-        else:
-            self.ln_teff_ln_tE = pm.DensityDist('ln_teff_ln_tE', 
-                self.prior_ln_teff_ln_tE, shape=2, 
-                testval = [np.log(10), np.log(20.)]) # p(ln_teff,ln_tE)
-
-            # Deterministic transformations
-            self.tE = pm.Deterministic("tE", T.exp(self.ln_teff_ln_tE[1]))
-            self.u0 = pm.Deterministic("u0", 
-                T.exp(self.ln_teff_ln_tE[0])/self.tE) 
+        self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
+        
+        # Deterministic transformations
+        self.tE = pm.Deterministic("tE", self.teff/self.u0) 
 
         # Noise model parameters
         self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
@@ -176,8 +154,10 @@ class PointSourcePointLensMarginalized(pm.Model):
         # modeling of multiple events using the importance resampling trick
         self.logp_t0 = pm.Deterministic('logp_t0',
             pm.Uniform.dist(self.t[0], self.t[-1]).logp(self.t0))
-        self.logp_ln_teff_ln_tE= pm.Deterministic('logp_ln', 
-            self.prior_ln_teff_ln_tE(self.ln_teff_ln_tE))
+        self.logp_u0 = pm.Deterministic('logp_u0', 
+            BoundedNormal.dist(mu=0., sd=1.).logp(self.u0))
+        self.logp_teff = pm.Deterministic('logp_teff', 
+            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
         self.logp_K = pm.Deterministic('logp_K',
             BoundedNormal1.dist( mu=1., sd=2.).logp(self.K))
         self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
@@ -236,12 +216,28 @@ class PointSourcePointLensMarginalized(pm.Model):
 
         return (A(u) - 1)/(A(self.u0) - 1) 
 
-    def prior_ln_teff_ln_tE(self, value):
-        """Returns the log of a custom joint prior p(ln_teff, ln_tE)."""
-        teff = T.cast(T.exp(value[0]), 'float64')
-        tE = T.cast(T.exp(value[1]), 'float64')
-        sig_tE = T.cast(365., 'float64') # p(tE)~N(0, 600)
-        sig_u0 = T.cast(1., 'float64') # p(u0)~N(0, 1)
+    def revert_flux_params_to_nonstandardized_format(self, data):
+        # Revert F_base and Delta_F to non-standardized units
+        median_F = np.median(data.df['I_flux'].values)
+        std_F = np.std(data.df['I_flux'].values)
 
-        return -T.log(tE) - (teff/tE)**2/sig_u0**2 - tE**2/sig_tE**2 +\
-            value[0] + value[1]
+        Delta_F_ = std_F*self.Delta_F + median_F
+        F_base_ = std_F*self.Delta_F + median_F
+
+        # Calculate source flux and blend flux
+        FS = Delta_F_/(self.peak_mag() - 1)
+        FB = (F_base_ - FS)/FS
+
+        # Convert fluxes to magnitudes
+        mu_m, sig_m = data.fluxes_to_magnitudes(np.array([FS, FB]), 
+            np.array([0., 0.]))
+        mag_source, mag_blend = mu_m
+
+        return mag_source, mag_blend
+
+    def peak_mag(self):
+        """Returns PSPL magnification at u=u0."""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return A(self.u0)

@@ -43,7 +43,7 @@ for event in events:
    # plt.savefig('output/' + event.event_name + '/data.pdf')
 
     # Fit a model
-    model1 = PointSourcePointLens(event, use_joint_prior=False)
+    model1 = PointSourcePointLens(event)
 
     # Sample models with NUTS
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
