@@ -61,7 +61,8 @@ class PointSourcePointLens(pm.Model):
         self.mag_blend = pm.Deterministic("m_blend", m_blend)
 
         # Noise model parameters
-        self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
+        self.A = BoundedNormal1('A', mu=1., sd=2., testval=1.5)
+        self.B = BoundedNormal('B', mu=0., sd=1., testval=0.01)
 
         # Save log prior for each parameter, this is needed for hierarchical
         # modeling of multiple events using the importance resampling trick
@@ -75,17 +76,30 @@ class PointSourcePointLens(pm.Model):
             BoundedNormal.dist(mu=0., sd=1.).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
             BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
-        self.logp_K = pm.Deterministic('logp_K',
-            BoundedNormal1.dist( mu=1., sd=2.).logp(self.K))
+        self.logp_A = pm.Deterministic('logp_A',
+            BoundedNormal1.dist( mu=1., sd=2.).logp(self.A))
+        self.logp_B = pm.Deterministic('logp_B',
+            BoundedNormal1.dist( mu=0., sd=1.).logp(self.B))
         self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
 
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
         self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
 
-        # Define the likelihood function~
-        Y_obs = pm.Normal('Y_obs', mu=self.mean_function(), sd=self.K*self.sigF, 
+        # Define the likelihood function
+        mean = self.mean_function()
+        peak_flux = self.Delta_F + self.F_base
+        sigF_modeled = T.sqrt(T.pow(self.A*T._shared(self.sigF), 2)+\
+             T.pow(self.magnification()*self.B, 2))
+        Y_obs = pm.Normal('Y_obs', mu=mean, sd=sigF_modeled, 
             observed=self.F, shape=len(self.F))
+
+    def magnification(self):
+        """Return the mean function which goes into the likeliood."""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return (A(u) - 1)/(A(self.u0) - 1) 
 
     def mean_function(self):
         """Return the mean function which goes into the likeliood."""
@@ -148,7 +162,8 @@ class PointSourcePointLensMarginalized(pm.Model):
         self.tE = pm.Deterministic("tE", self.teff/self.u0) 
 
         # Noise model parameters
-        self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
+        self.A = BoundedNormal1('A', mu=1., sd=2., testval=1.5)
+        self.B = BoundedNormal('B', mu=0., sd=1., testval=0.01)
 
         # Save log prior for each parameter, this is needed for hierarchical
         # modeling of multiple events using the importance resampling trick
@@ -158,8 +173,10 @@ class PointSourcePointLensMarginalized(pm.Model):
             BoundedNormal.dist(mu=0., sd=1.).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
             BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
-        self.logp_K = pm.Deterministic('logp_K',
-            BoundedNormal1.dist( mu=1., sd=2.).logp(self.K))
+        self.logp_A = pm.Deterministic('logp_A',
+            BoundedNormal1.dist( mu=1., sd=2.).logp(self.A))
+        self.logp_B = pm.Deterministic('logp_B',
+            BoundedNormal1.dist( mu=0., sd=1.).logp(self.B))
         self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
 
         # Define helpful class attributes
@@ -181,7 +198,8 @@ class PointSourcePointLensMarginalized(pm.Model):
         A = T.stack([mag_vector, T.ones(N)], axis=1)
 
         # Covariance matrix
-        C_diag = T.pow(self.K*T._shared(self.sigF), 2.)
+        C_diag = T.pow(self.A*T._shared(self.sigF), 2)+\
+             T.pow(self.magnification()*self.B, 2)
         C = T.nlinalg.diag(C_diag)
 
         # Prior matrix
