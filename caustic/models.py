@@ -62,7 +62,7 @@ class PointSourcePointLens(pm.Model):
 
         # Noise model parameters
         self.A = BoundedNormal1('A', mu=1., sd=2., testval=1.5)
-        self.B = BoundedNormal('B', mu=0., sd=1., testval=0.01)
+        self.B = BoundedNormal('B', mu=0., sd=2., testval=0.01)
 
         # Save log prior for each parameter, this is needed for hierarchical
         # modeling of multiple events using the importance resampling trick
@@ -79,7 +79,7 @@ class PointSourcePointLens(pm.Model):
         self.logp_A = pm.Deterministic('logp_A',
             BoundedNormal1.dist( mu=1., sd=2.).logp(self.A))
         self.logp_B = pm.Deterministic('logp_B',
-            BoundedNormal1.dist( mu=0., sd=1.).logp(self.B))
+            BoundedNormal1.dist( mu=0., sd=2.).logp(self.B))
         self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
 
         # Define helpful class attributes
@@ -88,7 +88,6 @@ class PointSourcePointLens(pm.Model):
 
         # Define the likelihood function
         mean = self.mean_function()
-        peak_flux = self.Delta_F + self.F_base
         sigF_modeled = T.sqrt(T.pow(self.A*T._shared(self.sigF), 2)+\
              T.pow(self.magnification()*self.B, 2))
         Y_obs = pm.Normal('Y_obs', mu=mean, sd=sigF_modeled, 
@@ -163,7 +162,7 @@ class PointSourcePointLensMarginalized(pm.Model):
 
         # Noise model parameters
         self.A = BoundedNormal1('A', mu=1., sd=2., testval=1.5)
-        self.B = BoundedNormal('B', mu=0., sd=1., testval=0.01)
+        self.B = BoundedNormal('B', mu=0., sd=2., testval=0.01)
 
         # Save log prior for each parameter, this is needed for hierarchical
         # modeling of multiple events using the importance resampling trick
@@ -176,7 +175,7 @@ class PointSourcePointLensMarginalized(pm.Model):
         self.logp_A = pm.Deterministic('logp_A',
             BoundedNormal1.dist( mu=1., sd=2.).logp(self.A))
         self.logp_B = pm.Deterministic('logp_B',
-            BoundedNormal1.dist( mu=0., sd=1.).logp(self.B))
+            BoundedNormal1.dist( mu=0., sd=2.).logp(self.B))
         self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
 
         # Define helpful class attributes
@@ -234,6 +233,105 @@ class PointSourcePointLensMarginalized(pm.Model):
 
         return (A(u) - 1)/(A(self.u0) - 1) 
 
+class PointSourcePointLensMatern32(pm.Model):
+    def __init__(self, data, name='', model=None):
+        super(PointSourcePointLensMatern32, self).__init__(name, model)
+
+        # Load and pre-process the data 
+        data.convert_data_to_fluxes()
+        df = data.get_standardized_data()
+        self.t = df['HJD - 2450000'].values
+        self.F = df['I_flux'].values
+        self.sigF = df['I_flux_err'].values
+
+        # Define custom prior distributions 
+        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # Delta_F is positive
+        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+        # Define model parameters and their associated priors
+        self.Delta_F = BoundedNormal('Delta_F', mu=np.max(self.F), sd=1., testval=3.)
+        self.F_base = pm.Normal('F_base', mu=0., sd=0.1, testval=0.)
+
+        ## Posterior is multi-modal in t0 and it's critical that the it is 
+        ## initialized near the true value
+        t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
+        self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
+            testval=self.t[t0_guess_idx])
+        self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
+        
+        # Deterministic transformations
+        self.tE = pm.Deterministic("tE", self.teff/self.u0) 
+
+        # Transform (Delta_F,F_basease) to (m_S,m_blend) using deterministic 
+        # mapping and save to trace
+        m_source, m_blend = self.revert_flux_params_to_nonstandardized_format(
+            data)
+        self.mag_source = pm.Deterministic("m_source", m_source)
+        self.mag_blend = pm.Deterministic("m_blend", m_blend)
+
+        # Noise model parameters
+        self.A = BoundedNormal1('A', mu=1., sd=2., testval=1.5)
+        self.B = BoundedNormal('B', mu=0., sd=2., testval=0.01)
+        ## Compute parameters for the prior on GP hyperparameters
+        invgamma_a, invgamma_b =  fsolve(self.solve_for_invgamma_params, (0.1, 0.1), 
+        (np.median(np.diff(self.t)), self.t[-1] - self.t[0]))
+
+        self.sigma = BoundedNormal('sigma', mu=0., sd=3., testval=0.5)
+        self.rho = pm.InverseGamma('rho', alpha=invgamma_a, beta=invgamma_b, 
+            testval=3.)
+
+        # Save log prior for each parameter, this is needed for hierarchical
+        # modeling of multiple events using the importance resampling trick
+        self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
+            BoundedNormal.dist(mu=np.max(self.F), sd=1.).logp(self.Delta_F))
+        self.logp_F_base = pm.Deterministic('logp_F_base',
+            pm.Normal.dist(mu=0., sd=0.1).logp(self.F_base))
+        self.logp_t0 = pm.Deterministic('logp_t0',
+            pm.Uniform.dist(self.t[0], self.t[-1]).logp(self.t0))
+        self.logp_u0 = pm.Deterministic('logp_u0', 
+            BoundedNormal.dist(mu=0., sd=1.).logp(self.u0))
+        self.logp_teff = pm.Deterministic('logp_teff', 
+            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
+        self.logp_A = pm.Deterministic('logp_A',
+            BoundedNormal1.dist( mu=1., sd=2.).logp(self.A))
+        self.logp_B = pm.Deterministic('logp_B',
+            BoundedNormal1.dist( mu=0., sd=2.).logp(self.B))
+        self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
+
+        # Define helpful class attributes
+        self.free_parameters = [RV.name for RV in self.basic_RVs]
+        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+
+        # Define the likelihood function
+        mean = self.mean_function()
+        varF_modeled = T.pow(self.A*T._shared(self.sigF), 2)+\
+             T.pow(self.magnification()*self.B, 2)
+
+        # Calculate likelihood
+        kernel = terms.Matern32Term(sigma=self.sigma, rho=self.rho)
+        # The exoplanet.gp.GP constructor takes an optional argument J which 
+        # specifies the width of the problem if it is known at compile time. 
+        # This is actually two times the J from the celerite paper
+        self.gp = GP(kernel, self.t, varF_modeled, J=2) # J=2 for Matern32 kernel
+
+        # Add a custom "potential" (log probability function) with the GP likelihood
+        pm.Potential("gp", self.gp.log_likelihood(self.F - self.mean_function()))
+
+    def magnification(self):
+        """Return the mean function which goes into the likeliood."""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return (A(u) - 1)/(A(self.u0) - 1) 
+
+    def mean_function(self):
+        """Return the mean function which goes into the likeliood."""
+        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return self.Delta_F*(A(u) - 1)/(A(self.u0) - 1) + self.F_base
+
     def revert_flux_params_to_nonstandardized_format(self, data):
         # Revert F_base and Delta_F to non-standardized units
         median_F = np.median(data.df['I_flux'].values)
@@ -259,3 +357,20 @@ class PointSourcePointLensMarginalized(pm.Model):
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
 
         return A(self.u0)
+
+    def solve_for_invgamma_params(self, params, x_min, x_max):
+        """Returns parameters of an inverse gamma distribution p(x) such that 
+        0.1% of total prob. mass is assigned to values of x < x_min and 
+        1% of total prob. masss  to values greater than x_max."""
+        def inverse_gamma_cdf(x, alpha, beta):
+            return invgamma.cdf(x, alpha, scale=beta)
+
+        lower_mass = 0.01
+        upper_mass = 0.99
+
+        # Trial parameters
+        alpha, beta = params
+
+        # Equation for the roots defining params which satisfy the constraint
+        return (inverse_gamma_cdf(x_min, alpha, beta) - \
+        lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)

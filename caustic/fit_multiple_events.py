@@ -7,14 +7,14 @@ import os, random
 import sys
 import exoplanet as xo
 
-from models import PointSourcePointLens
+from models import PointSourcePointLensMatern32
 from data import OGLEData
 
 random.seed(42)
 
 events = []  # data for each event
 
-data_path = '/home/star/fb90/data/OGLE_ews/2017/'
+data_path = '/home/fran/data/OGLE_ews/2017/'
 dirs = []
 for directory in os.listdir(data_path):
     dirs.append(directory)
@@ -32,7 +32,8 @@ for event in events:
     print("Fitting models for event ", event.event_name)
 
     # Define output directories
-    output_dir_standard = 'output/' + event.event_name + '/PointSourcePointLens'
+    output_dir_standard = 'output/' + event.event_name +\
+         '/PointSourcePointLensMatern32'
 
     if not os.path.exists(output_dir_standard):
         os.makedirs(output_dir_standard)
@@ -43,7 +44,7 @@ for event in events:
    # plt.savefig('output/' + event.event_name + '/data.pdf')
 
     # Fit a model
-    model1 = PointSourcePointLens(event)
+    model1 = PointSourcePointLensMatern32(event)
 
     # Sample models with NUTS
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
