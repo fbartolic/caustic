@@ -14,7 +14,7 @@ random.seed(42)
 
 events = []  # data for each event
 
-data_path = '/home/fran/data/OGLE_ews/2017/'
+data_path = '/home/star/fb90/data/OGLE_ews/2017/'
 dirs = []
 for directory in os.listdir(data_path):
     dirs.append(directory)
@@ -44,12 +44,11 @@ for event in events:
    # plt.savefig('output/' + event.event_name + '/data.pdf')
 
     # Fit a model
-    model1 = PointSourcePointLensMatern32(event)
 
     # Sample models with NUTS
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
 
-    with model1 as model_standard:
+    with PointSourcePointLensMatern32(event) as model_standard:
         print("Free parameters: ", model_standard.free_parameters)
         print("Initial values of logp for each parameter: ", 
             model_standard.initial_logps)
