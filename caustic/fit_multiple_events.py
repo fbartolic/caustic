@@ -7,7 +7,7 @@ import os, random
 import sys
 import exoplanet as xo
 
-from models import PointSourcePointLensMatern32
+from models import PointSourcePointLensWhiteNoise
 from data import OGLEData
 
 random.seed(42)
@@ -33,7 +33,7 @@ for event in events:
 
     # Define output directories
     output_dir_standard = 'output/' + event.event_name +\
-         '/PointSourcePointLensMatern32'
+         '/PointSourcePointLensWhiteNoise'
 
     if not os.path.exists(output_dir_standard):
         os.makedirs(output_dir_standard)
@@ -48,7 +48,7 @@ for event in events:
     # Sample models with NUTS
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
 
-    with PointSourcePointLensMatern32(event) as model_standard:
+    with PointSourcePointLensWhiteNoise(event) as model_standard:
         print("Free parameters: ", model_standard.free_parameters)
         print("Initial values of logp for each parameter: ", 
             model_standard.initial_logps)
