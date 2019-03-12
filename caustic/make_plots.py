@@ -1,7 +1,9 @@
+import numpy as np
 from data import OGLEData
 from utils import plot_model_and_residuals
 from matplotlib import pyplot as plt
-from models import PointSourcePointLens
+from models import PointSourcePointLensWhiteNoise1
+from models import PointSourcePointLensMatern32
 import pymc3 as pm
 import os 
 
@@ -17,23 +19,16 @@ for entry in os.scandir('output'):
         print(event.event_name)
 
         # Load traces
-        output_dir = 'output/' + event.event_name + '/PointSourcePointLens/' 
-        model_standard = PointSourcePointLens(event, use_joint_prior=False)
-        
-        with model_standard:
-            trace_standard = pm.load_trace(output_dir + 'model.trace') 
+        output_dir = 'output/' + event.event_name + '/PointSourcePointLensMatern32/' 
 
-        # Plot traceplots
-        #plot_traceplots(trace_standard, 15, output_dir)
-
-        # Plot model
+        # Plot non-GP models
         fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-                figsize=(25, 10), sharex=True)
+            figsize=(25, 10), sharex=True)
         fig.subplots_adjust(hspace=0.05)
-        plot_model_and_residuals(ax, event, model_standard, trace_standard, 0,
-            len(event.df['HJD - 2450000']) - 1)
+
+        plot_model_and_residuals(ax, event, 
+        PointSourcePointLensMatern32(event), output_dir + 'model.trace')
         plt.savefig(output_dir + 'model.png')
 
-        # Trace in dataframe format
-        df = pm.trace_to_dataframe(trace_standard)
-        df.to_csv(output_dir + 'data.csv')
+        plt.show()
+

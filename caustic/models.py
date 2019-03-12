@@ -6,6 +6,7 @@ import theano
 import theano.tensor as T
 
 import exoplanet as xo
+from exoplanet.gp import terms, GP
 
 from scipy.special import gamma
 from scipy.stats import invgamma
@@ -202,13 +203,16 @@ class PointSourcePointLens(pm.Model):
                 testval=T.zeros((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(self.t[0], self.t[-1]).logp(self.t0))
+            pm.Uniform.dist(T.min(self.t), T.max(self.t)).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
             BoundedNormal.dist(mu=0., sd=1.).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
             BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
+
+        # Save names of most important parameters in the model
+        self.param_names = ['t0', 'u0', 'tE']
         
-    def magnification(self, t):
+    def magnification(self):
         """
         Calculates the PSPL magnification fraction [A(u) - 1]/[A(u0) - 1]
         where A(u) is the analytic PSPL magnification.
@@ -262,9 +266,100 @@ class PointSourcePointLens(pm.Model):
         """
         return 0
 
-class PointSourcePointLensWhiteNoise(PointSourcePointLens):
+    def evaluate_model_on_grid(self, trace, t_grid, n_samples=50):
+        """
+        Evaluates model on dense grid for N_pred random samples from the 
+        posterior.
+        
+        """
+        model_prediction = np.zeros((self.n_bands, n_samples, len(t_grid)))
+        t_grid = T._shared(t_grid)
+
+        for n in range(self.n_bands):
+            # Evaluate model
+            for i, sample in enumerate(xo.get_samples_from_trace(trace, 
+                    size=n_samples)):
+
+                # Tensor which is to be evaluated in model context
+                pred = self.Delta_F[n]*self.magnification(t_grid) +\
+                        self.F_base[n]
+
+                model_prediction[n, i] = xo.eval_in_model(pred, sample)
+            
+        return model_prediction
+
+class PointSourcePointLensWhiteNoise1(PointSourcePointLens):
     def __init__(self, data, name='', model=None):
-        super(PointSourcePointLensWhiteNoise, self).__init__(data, name)
+        super(PointSourcePointLensWhiteNoise1, self).__init__(data, name)
+
+        # Define custom prior distributions 
+        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
+        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+        ## Noise model parameters
+        self.A = BoundedNormal1('A', 
+            mu=T.ones((self.n_bands, 1)),
+            sd=2.*T.ones((self.n_bands, 1)),
+            testval=1.5*T.ones((self.n_bands, 1)),
+            shape=(self.n_bands, 1))
+
+        ## Save log prior for each parameter for hierarhical modeling 
+        self.logp_A = pm.Deterministic('logp_A',
+            pm.Normal.dist(
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1)).logp(self.A))
+
+        # Define helpful class attributes
+        self.free_parameters = [RV.name for RV in self.basic_RVs]
+        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+
+        # Save names of most important parameters in the model
+        self.param_names += ['A']
+
+        # Custom likelihood function
+        pm.Potential('likelihood', self.log_likelihood())
+
+    def log_likelihood(self):
+        """Implements a white noise Gaussian likelihood function, assuming
+        that the observations in each photometric band are independent."""
+
+        def log_likelihood_for_single_band(t, F, sigF, Delta_F, F_base, A):
+            # Calculate magnification
+            mag = self.magnification(t)
+
+            # Calculate the mean function
+            mean = Delta_F*mag +  F_base
+
+            # Residuals
+            r = F - mean
+
+            # Diagonal terms of the covariance matrix
+            varF = T.pow(A*sigF, 2) 
+
+            # Gaussian likelihood
+            ll = -0.5*T.sum(T.pow(r, 2.)/varF) -\
+                 0.5*T.sum(T.log(2*np.pi*varF))
+
+            return ll
+
+        # For loops are not allowed here so we have to use theano.scan,
+        # theano scan iterates over the slices of tensors passed as `sequences`
+        # and applies a function `fn` to each slice. In our case the sequences
+        # are matrices so `fn` operates on vectors, such as time and flux.
+        result, updates = theano.scan(fn=log_likelihood_for_single_band,
+                                outputs_info=None,
+                                sequences=[self.t, self.F, self.sigF, 
+                                    self.Delta_F, self.F_base, self.A])
+
+        # Sum over all bands
+        return T.sum(result)
+
+
+class PointSourcePointLensWhiteNoise2(PointSourcePointLens):
+    def __init__(self, data, name='', model=None):
+        super(PointSourcePointLensWhiteNoise2, self).__init__(data, name)
 
         # Define custom prior distributions 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
@@ -283,7 +378,6 @@ class PointSourcePointLensWhiteNoise(PointSourcePointLens):
             testval=0.01*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
-
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_A = pm.Deterministic('logp_A',
             pm.Normal.dist(
@@ -301,6 +395,9 @@ class PointSourcePointLensWhiteNoise(PointSourcePointLens):
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
         self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+
+        # Save names of most important parameters in the model
+        self.param_names += ['A', 'B']
 
         # Custom likelihood function
         pm.Potential('likelihood', self.log_likelihood())
@@ -320,7 +417,7 @@ class PointSourcePointLensWhiteNoise(PointSourcePointLens):
             r = F - mean
 
             # Diagonal terms of the covariance matrix
-            varF = T.pow(A*sigF, 2) + T.pow(mag*B, 2)
+            varF = T.pow(A*sigF, 2) + T.pow(B, 2)
 
             # Gaussian likelihood
             ll = -0.5*T.sum(T.pow(r, 2.)/varF) -\
@@ -340,9 +437,9 @@ class PointSourcePointLensWhiteNoise(PointSourcePointLens):
         # Sum over all bands
         return T.sum(result)
 
-class PointSourcePointLensMatern32(PointSourcePointLens):
+class PointSourcePointLensWhiteNoise3(PointSourcePointLens):
     def __init__(self, data, name='', model=None):
-        super(PointSourcePointLensMatern32, self).__init__(data, name)
+        super(PointSourcePointLensWhiteNoise3, self).__init__(data, name)
 
         # Define custom prior distributions 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
@@ -379,6 +476,9 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
         self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+
+        # Save names of most important parameters in the model
+        self.param_names += ['A', 'B']
 
         # Custom likelihood function
         pm.Potential('likelihood', self.log_likelihood())
@@ -492,6 +592,9 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
         self.free_parameters = [RV.name for RV in self.basic_RVs]
         self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
 
+        # Save names of most important parameters in the model
+        self.param_names += ['A', 'B', 'sigma', 'rho']
+
         # Custom likelihood function
         pm.Potential('likelihood', self.log_likelihood())
 
@@ -534,11 +637,11 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
             varF = T.pow(A*sigF, 2) + T.pow(mag*B, 2)
 
             # Calculate likelihood
-            kernel = xo.gp.terms.Matern32Term(sigma=sigma, rho=rho)
+            kernel = terms.Matern32Term(sigma=sigma, rho=rho)
             # The exoplanet.gp.GP constructor takes an optional argument J which 
             # specifies the width of the problem if it is known at compile time. 
             # This is actually two times the J from the celerite paper
-            gp = xo.gp.GP(kernel, t, varF, J=2) # J=2 for Matern32 kernel
+            gp = GP(kernel, t, varF, J=2) # J=2 for Matern32 kernel
 
             # Add a custom "potential" (log probability function) with the 
             # GP likelihood
@@ -558,6 +661,49 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
 
         # Sum over all bands
         return T.sum(result)
+    
+    def evaluate_model_on_grid(self, trace, t_grid, n_samples=50):
+        """
+        Evaluates GP model on dense grid for N_pred random samples from the 
+        posterior.
+        
+        """
+        model_prediction = np.zeros((self.n_bands, n_samples, len(t_grid)))
+        t_grid = T._shared(t_grid)
+
+        print(T.shape(self.Delta_F))
+        
+        for n in range(self.n_bands):
+            # Evaluate model for each sample in the chain
+            for i, sample in enumerate(xo.get_samples_from_trace(trace, 
+                    size=n_samples)):
+                # Evaluate mean function at observed times
+                mag_obs = self.magnification(self.t[n])
+                mean_func_obs = self.Delta_F[n]*mag_obs + self.F_base[n]
+
+                # Evaluate mean function on fine grid
+                mag = self.magnification(t_grid) 
+                mean_func = self.Delta_F[n]*mag + self.F_base[n]
+                
+                # Diagonal terms of the covariance matrix
+                varF = T.pow(self.A[n]*self.sigF[n], 2) +\
+                     T.pow(mag_obs*self.B[n], 2)
+
+                # Initialize kernel and gp object
+                kernel = terms.Matern32Term(sigma=self.sigma[n], 
+                    rho=self.rho[n])
+                gp = GP(kernel, self.t[n], varF, J=2)
+
+                # Calculate log_likelihood 
+                r = self.F[n] - mean_func_obs
+                gp.log_likelihood(r)
+
+                # Evaluate tensors in model context
+                model_prediction[n, i] =\
+                    xo.eval_in_model(gp.predict(t_grid), sample) +\
+                    xo.eval_in_model(mean_func, sample) 
+            
+        return model_prediction
 
 #class PointSourcePointLensMarginalized(pm.Model):
 #    def __init__(self, data, name='', model=None):

@@ -230,7 +230,7 @@ class Data(object):
         std_tables = self.get_standardized_data()
 
         for i, table in enumerate(std_tables):
-            ax.errorbar(table['HJD'] - 2450000, table['flux'], 
+            ax.errorbar(table['HJD'], table['flux'], 
                 table['flux_err'], fmt='.', color='C' + str(i), 
                 label=table.meta['band'], ecolor='C' + str(i))
 
@@ -258,6 +258,7 @@ class OGLEData(Data):
         t = Table.read(event_dir + '/phot.dat', format='ascii', 
             names=('HJD', 'mag', 'mag_err', 'col4', 'col5'))
         t.keep_columns(('HJD', 'mag', 'mag_err'))
+        t.meta = {'band':'OGLE I', 'observatory':'OGLE'}
         self.tables.append(t)
 
 class MOAData(Data):
@@ -299,7 +300,7 @@ class MOAData(Data):
             t.rename_column('col1', 'HJD')
             t.rename_column('col2', 'mag')
             t.rename_column('col3', 'mag_err')
-            t.meta = {'band':'OGLE I', 'observatory':'OGLE'}
+            t.meta = {'band':'MOA I', 'observatory':'MOA'}
 
             # Remove the random rows with zero time and negative time
             t = t[t['HJD'] > 0]
