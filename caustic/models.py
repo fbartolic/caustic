@@ -12,128 +12,6 @@ from scipy.special import gamma
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
 
-class PointSourcePointLensSingleBand(pm.Model):
-    #  override __init__ function from pymc3 Model class
-    def __init__(self, data, name='', model=None):
-        # call super's init first, passing model and name
-        # to it name will be prefix for all variables here if
-        # no name specified for model there will be no prefix
-        super(PointSourcePointLensSingleBand, self).__init__(name, model)
-        # now you are in the context of instance,
-        # `modelcontext` will return self you can define
-        # variables in several ways note, that all variables
-        # will get model's name prefix
-
-        # Load and pre-process the data 
-        tables = data.get_standardized_data()
-
-        self.t = np.array(tables[0]['HJD'])
-        self.F = np.array(tables[0]['flux'])
-        self.sigF = np.array(tables[0]['flux_err'])
-
-        # Define custom prior distributions 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) # Delta_F is positive
-        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
-        # Define model parameters and their associated priors
-        self.Delta_F = BoundedNormal('Delta_F', mu=np.max(self.F), sd=1., testval=3.)
-        self.F_base = pm.Normal('F_base', mu=0., sd=0.1, testval=0.)
-
-        ## Posterior is multi-modal in t0 and it's critical that the it is 
-        ## initialized near the true value
-        t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
-        self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
-            testval=self.t[t0_guess_idx])
-        self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
-        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
-        
-        # Deterministic transformations
-        self.tE = pm.Deterministic("tE", self.teff/self.u0) 
-
-        # Transform (Delta_F,F_basease) to (m_S,m_blend) using deterministic 
-        # mapping and save to trace
-        m_source, m_blend = self.revert_flux_params_to_nonstandardized_format(
-            data)
-        self.mag_source = pm.Deterministic("m_source", m_source)
-        self.mag_blend = pm.Deterministic("m_blend", m_blend)
-
-        # Noise model parameters
-        self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
-
-        # Save log prior for each parameter, this is needed for hierarchical
-        # modeling of multiple events using the importance resampling trick
-        self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            BoundedNormal.dist(mu=np.max(self.F), sd=1.).logp(self.Delta_F))
-        self.logp_F_base = pm.Deterministic('logp_F_base',
-            pm.Normal.dist(mu=0., sd=0.1).logp(self.F_base))
-        self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(self.t[0], self.t[-1]).logp(self.t0))
-        self.logp_u0 = pm.Deterministic('logp_u0', 
-            BoundedNormal.dist(mu=0., sd=1.).logp(self.u0))
-        self.logp_teff = pm.Deterministic('logp_teff', 
-            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
-        self.logp_K = pm.Deterministic('logp_K',
-            BoundedNormal1.dist( mu=1., sd=2.).logp(self.K))
-        self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
-
-        # Noise model parameters
-        self.A = BoundedNormal1('A', mu=1., sd=2., testval=1.5)
-        self.B = BoundedNormal('B', mu=0., sd=1., testval=0.01)
-
-        # Save log prior for each parameter
-        self.logp_A = pm.Deterministic('logp_A',
-            BoundedNormal1.dist( mu=1., sd=2.).logp(self.A))
-        self.logp_B = pm.Deterministic('logp_B',
-            BoundedNormal1.dist( mu=0., sd=1.).logp(self.B))
-
-        # Define helpful class attributes
-        self.free_parameters = [RV.name for RV in self.basic_RVs]
-        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
-
-        # Define the likelihood function
-        peak_flux = self.Delta_F + self.F_base
-        sigF_modeled = T.sqrt(T.pow(self.A*T._shared(self.sigF), 2)+\
-             T.pow(self.magnification()*self.B, 2))
-
-        Y_obs = pm.Normal('Y_obs', 
-            mu=self.mean_function(), 
-            sd=sigF_modeled, 
-            observed=self.F, 
-            shape=len(self.F))
-
-    def mean_function(self):
-        """Return the mean function which goes into the likeliood."""
-        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
-        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-
-        return self.Delta_F*(A(u) - 1)/(A(self.u0) - 1) + self.F_base
-
-    def revert_flux_params_to_nonstandardized_format(self, data):
-        # Revert F_base and Delta_F to non-standardized units
-        median_F = np.median(data.df['I_flux'].values)
-        std_F = np.std(data.df['I_flux'].values)
-
-        Delta_F_ = std_F*self.Delta_F + median_F
-        F_base_ = std_F*self.Delta_F + median_F
-
-        # Calculate source flux and blend flux
-        FS = Delta_F_/(self.peak_mag() - 1)
-        FB = (F_base_ - FS)/FS
-
-        # Convert fluxes to magnitudes
-        mu_m, sig_m = data.fluxes_to_magnitudes(np.array([FS, FB]), 
-            np.array([0., 0.]))
-        mag_source, mag_blend = mu_m
-
-        return mag_source, mag_blend
-
-    def peak_mag(self):
-        """Returns PSPL magnification at u=u0."""
-        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
-        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-
-        return A(self.u0)
-
 class PointSourcePointLens(pm.Model):
     """
     Skeleton class for a PSPL model. Classes which inherit from this class 
@@ -148,15 +26,20 @@ class PointSourcePointLens(pm.Model):
         tables = data.get_standardized_data()
         self.n_bands = len(tables) # number of photometric bands
 
-        ## To avoid loops, we pad the arrays with zeros, the final shape of the
+        ## To avoid loops, we pad the arrays with additional values, in
+        ## particular, we padd the flux arrays with very large values such
+        ## the likelihood for those points is zero. The final shape of the
         ## arrays is (self.n_bands, n_datapoints) and we can iterate over the bands
         n_max =  np.max([len(table) for table in tables])
         self.t = T._shared(np.stack([np.pad(table['HJD'], 
-            (0, n_max - len(table['HJD'])), 'constant') for table in tables]))
+            (0, n_max - len(table['HJD'])), 'constant', 
+            constant_values=(0.,)) for table in tables]))
         self.F = T._shared(np.stack([np.pad(table['flux'], 
-            (0, n_max - len(table['flux'])), 'constant') for table in tables]))
+            (0, n_max - len(table['flux'])), 'constant',
+            constant_values=(1.e-20,)) for table in tables]))
         self.sigF = T._shared(np.stack([np.pad(table['flux_err'], 
-            (0, n_max - len(table['flux_err'])), 'constant') for table in tables]))
+            (0, n_max - len(table['flux_err'])), 'constant',
+            constant_values=(1.,)) for table in tables]))
 
         # Define custom prior distributions 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
@@ -164,7 +47,7 @@ class PointSourcePointLens(pm.Model):
 
         # Initialize linear parameters
         self.Delta_F = BoundedNormal('Delta_F', 
-            mu=T.max(self.F)*T.ones((self.n_bands, 1)),
+            mu=4.*T.ones((self.n_bands, 1)),
             sd=1.*T.ones((self.n_bands, 1)),
             testval=3.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
@@ -182,7 +65,8 @@ class PointSourcePointLens(pm.Model):
             T.abs_(T.flatten(self.F) - T.max(T.flatten(self.F)))
         )
         self.t0 = pm.Uniform('t0', T.min(self.t), T.max(self.t), 
-            testval=T.flatten(self.t)[t0_guess_idx])
+            testval=7990.) 
+            #testval=T.flatten(self.t)[t0_guess_idx])
         self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
         self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
         
@@ -212,7 +96,7 @@ class PointSourcePointLens(pm.Model):
         # Save names of most important parameters in the model
         self.param_names = ['t0', 'u0', 'tE']
         
-    def magnification(self):
+    def magnification(self, t):
         """
         Calculates the PSPL magnification fraction [A(u) - 1]/[A(u0) - 1]
         where A(u) is the analytic PSPL magnification.
@@ -225,7 +109,7 @@ class PointSourcePointLens(pm.Model):
         Returns
         -------
         theano.tensor
-            Magnification values at each time. 
+            Magnification values for each time vector, shape (n_bands, n_data). 
         """
 
         u = T.sqrt(self.u0**2 + ((t - self.t0)/self.tE)**2)
@@ -261,10 +145,27 @@ class PointSourcePointLens(pm.Model):
 
     def log_likelihood(self):
         """
-        Subclasses should overload this method.
-        
+        Implements a white noise Gaussian likelihood function, assuming
+        that the observations in each photometric band are independent. 
+        Subclasses should overload this method if necessary.
         """
-        return 0
+        def log_likelihood_for_single_band(r, varF):
+            # Gaussian likelihood
+            ll = -0.5*T.sum(T.pow(r, 2.)/varF) -\
+                 0.5*T.sum(T.log(2*np.pi*varF))
+
+            return ll
+
+        # For loops are not allowed here so we have to use theano.scan,
+        # theano scan iterates over the slices of tensors passed as `sequences`
+        # and applies a function `fn` to each slice. In our case the sequences
+        # are matrices so `fn` operates on vectors, such as time and flux.
+        result, updates = theano.scan(fn=log_likelihood_for_single_band,
+                                outputs_info=None,
+                                sequences=[self.r, self.varF])
+
+        # Sum over all bands
+        return T.sum(result)
 
     def evaluate_model_on_grid(self, trace, t_grid, n_samples=50):
         """
@@ -310,6 +211,18 @@ class PointSourcePointLensWhiteNoise1(PointSourcePointLens):
                 sd=2.*T.ones((self.n_bands, 1)),
                 testval=1.5*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.A))
+        
+        # Compute the likelihood function
+        mag = self.magnification(self.t) 
+        mean_func = self.Delta_F*mag +  self.F_base # mean function
+
+        # Residuals
+        self.r = self.F - mean_func
+
+        # Diagonal terms of the covariance matrix
+        self.varF = T.pow(self.A*self.sigF, 2) 
+
+        pm.Potential('likelihood', self.log_likelihood())
 
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
@@ -317,45 +230,6 @@ class PointSourcePointLensWhiteNoise1(PointSourcePointLens):
 
         # Save names of most important parameters in the model
         self.param_names += ['A']
-
-        # Custom likelihood function
-        pm.Potential('likelihood', self.log_likelihood())
-
-    def log_likelihood(self):
-        """Implements a white noise Gaussian likelihood function, assuming
-        that the observations in each photometric band are independent."""
-
-        def log_likelihood_for_single_band(t, F, sigF, Delta_F, F_base, A):
-            # Calculate magnification
-            mag = self.magnification(t)
-
-            # Calculate the mean function
-            mean = Delta_F*mag +  F_base
-
-            # Residuals
-            r = F - mean
-
-            # Diagonal terms of the covariance matrix
-            varF = T.pow(A*sigF, 2) 
-
-            # Gaussian likelihood
-            ll = -0.5*T.sum(T.pow(r, 2.)/varF) -\
-                 0.5*T.sum(T.log(2*np.pi*varF))
-
-            return ll
-
-        # For loops are not allowed here so we have to use theano.scan,
-        # theano scan iterates over the slices of tensors passed as `sequences`
-        # and applies a function `fn` to each slice. In our case the sequences
-        # are matrices so `fn` operates on vectors, such as time and flux.
-        result, updates = theano.scan(fn=log_likelihood_for_single_band,
-                                outputs_info=None,
-                                sequences=[self.t, self.F, self.sigF, 
-                                    self.Delta_F, self.F_base, self.A])
-
-        # Sum over all bands
-        return T.sum(result)
-
 
 class PointSourcePointLensWhiteNoise2(PointSourcePointLens):
     def __init__(self, data, name='', model=None):
@@ -392,50 +266,25 @@ class PointSourcePointLensWhiteNoise2(PointSourcePointLens):
                 testval=0.01*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.B))
 
+        # Compute the likelihood function
+        mag = self.magnification(self.t) 
+        mean_func = self.Delta_F*mag +  self.F_base # mean function
+
+        # Residuals
+        self.r = self.F - mean_func
+
+        # Diagonal terms of the covariance matrix
+        self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
+
+        pm.Potential('likelihood', self.log_likelihood())
+
+
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
         self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
 
         # Save names of most important parameters in the model
         self.param_names += ['A', 'B']
-
-        # Custom likelihood function
-        pm.Potential('likelihood', self.log_likelihood())
-
-    def log_likelihood(self):
-        """Implements a white noise Gaussian likelihood function, assuming
-        that the observations in each photometric band are independent."""
-
-        def log_likelihood_for_single_band(t, F, sigF, Delta_F, F_base, A, B):
-            # Calculate magnification
-            mag = self.magnification(t)
-
-            # Calculate the mean function
-            mean = Delta_F*mag +  F_base
-
-            # Residuals
-            r = F - mean
-
-            # Diagonal terms of the covariance matrix
-            varF = T.pow(A*sigF, 2) + T.pow(B, 2)
-
-            # Gaussian likelihood
-            ll = -0.5*T.sum(T.pow(r, 2.)/varF) -\
-                 0.5*T.sum(T.log(2*np.pi*varF))
-
-            return ll
-
-        # For loops are not allowed here so we have to use theano.scan,
-        # theano scan iterates over the slices of tensors passed as `sequences`
-        # and applies a function `fn` to each slice. In our case the sequences
-        # are matrices so `fn` operates on vectors, such as time and flux.
-        result, updates = theano.scan(fn=log_likelihood_for_single_band,
-                                outputs_info=None,
-                                sequences=[self.t, self.F, self.sigF, 
-                                    self.Delta_F, self.F_base, self.A, self.B])
-
-        # Sum over all bands
-        return T.sum(result)
 
 class PointSourcePointLensWhiteNoise3(PointSourcePointLens):
     def __init__(self, data, name='', model=None):
@@ -473,50 +322,24 @@ class PointSourcePointLensWhiteNoise3(PointSourcePointLens):
                 testval=0.01*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.B))
 
+        # Compute the likelihood function
+        mag = self.magnification(self.t) 
+        mean_func = self.Delta_F*mag +  self.F_base # mean function
+
+        # Residuals
+        self.r = self.F - mean_func
+
+        # Diagonal terms of the covariance matrix
+        self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
+
+        pm.Potential('likelihood', self.log_likelihood())
+
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
         self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
 
         # Save names of most important parameters in the model
         self.param_names += ['A', 'B']
-
-        # Custom likelihood function
-        pm.Potential('likelihood', self.log_likelihood())
-
-    def log_likelihood(self):
-        """Implements a white noise Gaussian likelihood function, assuming
-        that the observations in each photometric band are independent."""
-
-        def log_likelihood_for_single_band(t, F, sigF, Delta_F, F_base, A, B):
-            # Calculate magnification
-            mag = self.magnification(t)
-
-            # Calculate the mean function
-            mean = Delta_F*mag +  F_base
-
-            # Residuals
-            r = F - mean
-
-            # Diagonal terms of the covariance matrix
-            varF = T.pow(A*sigF, 2) + T.pow(mag*B, 2)
-
-            # Gaussian likelihood
-            ll = -0.5*T.sum(T.pow(r, 2.)/varF) -\
-                 0.5*T.sum(T.log(2*np.pi*varF))
-
-            return ll
-
-        # For loops are not allowed here so we have to use theano.scan,
-        # theano scan iterates over the slices of tensors passed as `sequences`
-        # and applies a function `fn` to each slice. In our case the sequences
-        # are matrices so `fn` operates on vectors, such as time and flux.
-        result, updates = theano.scan(fn=log_likelihood_for_single_band,
-                                outputs_info=None,
-                                sequences=[self.t, self.F, self.sigF, 
-                                    self.Delta_F, self.F_base, self.A, self.B])
-
-        # Sum over all bands
-        return T.sum(result)
 
 class PointSourcePointLensMatern32(PointSourcePointLens):
     def __init__(self, data):
@@ -587,6 +410,18 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
                 beta = T._shared(invgamma_b)*T.ones((self.n_bands, 1)),
                 testval=0.5*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.rho))
+        
+        # Compute the likelihood function
+        mag = self.magnification(self.t) 
+        mean_func = self.Delta_F*mag +  self.F_base # mean function
+
+        # Residuals
+        self.r = self.F - mean_func
+
+        # Diagonal terms of the covariance matrix
+        self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
+
+        pm.Potential('likelihood', self.log_likelihood())
 
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
@@ -594,10 +429,7 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
 
         # Save names of most important parameters in the model
         self.param_names += ['A', 'B', 'sigma', 'rho']
-
-        # Custom likelihood function
-        pm.Potential('likelihood', self.log_likelihood())
-
+        
     def solve_for_invgamma_params(self, params, x_min, x_max):
         """
         Returns parameters of an inverse gamma distribution p(x) such that 
@@ -622,20 +454,7 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
         """Implements a white noise Gaussian likelihood function, assuming
         that the observations in each photometric band are independent."""
 
-        def log_likelihood_for_single_band(t, F, sigF, Delta_F, F_base, A, B,
-                sigma, rho):
-            # Calculate magnification
-            mag = self.magnification(t)
-
-            # Calculate the mean function
-            mean = Delta_F*mag +  F_base
-
-            # Residuals
-            r = F - mean
-
-            # Diagonal terms of the covariance matrix
-            varF = T.pow(A*sigF, 2) + T.pow(mag*B, 2)
-
+        def log_likelihood_for_single_band(t, r, varF, sigma, rho):
             # Calculate likelihood
             kernel = terms.Matern32Term(sigma=sigma, rho=rho)
             # The exoplanet.gp.GP constructor takes an optional argument J which 
@@ -655,9 +474,8 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
         # are matrices so `fn` operates on vectors, such as time and flux.
         result, updates = theano.scan(fn=log_likelihood_for_single_band,
                                 outputs_info=None,
-                                sequences=[self.t, self.F, self.sigF, 
-                                        self.Delta_F, self.F_base, self.A,
-                                        self.B, self.sigma, self.rho])
+                                sequences=[self.t, self.r, self.varF,
+                                         self.sigma, self.rho])
 
         # Sum over all bands
         return T.sum(result)
@@ -671,8 +489,6 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
         model_prediction = np.zeros((self.n_bands, n_samples, len(t_grid)))
         t_grid = T._shared(t_grid)
 
-        print(T.shape(self.Delta_F))
-        
         for n in range(self.n_bands):
             # Evaluate model for each sample in the chain
             for i, sample in enumerate(xo.get_samples_from_trace(trace, 
