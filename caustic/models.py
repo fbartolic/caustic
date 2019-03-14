@@ -36,10 +36,21 @@ class PointSourcePointLens(pm.Model):
             constant_values=(0.,)) for table in tables]))
         self.F = T._shared(np.stack([np.pad(table['flux'], 
             (0, n_max - len(table['flux'])), 'constant',
-            constant_values=(1.e-20,)) for table in tables]))
+            constant_values=(0.,)) for table in tables]))
         self.sigF = T._shared(np.stack([np.pad(table['flux_err'], 
             (0, n_max - len(table['flux_err'])), 'constant',
-            constant_values=(1.,)) for table in tables]))
+            constant_values=(0.,)) for table in tables]))
+
+        # Masking array which is later used to mask out the padded values
+        masks_list = []
+        for table in tables:
+            array = np.append(
+                np.ones(len(table['HJD'])),  
+                np.zeros(n_max - len(table['HJD']))
+                )
+            masks_list.append(array)
+
+        self.mask = T._shared(np.stack(masks_list).astype('int8'))
 
         # Define custom prior distributions 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
@@ -47,14 +58,14 @@ class PointSourcePointLens(pm.Model):
 
         # Initialize linear parameters
         self.Delta_F = BoundedNormal('Delta_F', 
-            mu=4.*T.ones((self.n_bands, 1)),
+            mu=5.*T.ones((self.n_bands, 1)),
             sd=1.*T.ones((self.n_bands, 1)),
             testval=3.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
         self.F_base = pm.Normal('F_base', 
             mu=T.zeros((self.n_bands, 1)), 
-            sd=0.1*T.ones((self.n_bands, 1)),
+            sd=0.01*T.ones((self.n_bands, 1)),
             testval=T.zeros((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
@@ -65,7 +76,7 @@ class PointSourcePointLens(pm.Model):
             T.abs_(T.flatten(self.F) - T.max(T.flatten(self.F)))
         )
         self.t0 = pm.Uniform('t0', T.min(self.t), T.max(self.t), 
-            testval=7990.) 
+            testval=7995.) 
             #testval=T.flatten(self.t)[t0_guess_idx])
         self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
         self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
@@ -149,10 +160,10 @@ class PointSourcePointLens(pm.Model):
         that the observations in each photometric band are independent. 
         Subclasses should overload this method if necessary.
         """
-        def log_likelihood_for_single_band(r, varF):
+        def log_likelihood_for_single_band(r, varF, mask):
             # Gaussian likelihood
-            ll = -0.5*T.sum(T.pow(r, 2.)/varF) -\
-                 0.5*T.sum(T.log(2*np.pi*varF))
+            ll = -0.5*T.sum(T.pow(r[mask.nonzero()], 2.)/varF) -\
+                 0.5*T.sum(T.log(2*np.pi*varF[mask.nonzero()]))
 
             return ll
 
@@ -277,7 +288,6 @@ class PointSourcePointLensWhiteNoise2(PointSourcePointLens):
         self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
 
         pm.Potential('likelihood', self.log_likelihood())
-
 
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
@@ -454,17 +464,17 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
         """Implements a white noise Gaussian likelihood function, assuming
         that the observations in each photometric band are independent."""
 
-        def log_likelihood_for_single_band(t, r, varF, sigma, rho):
+        def log_likelihood_for_single_band(t, r, varF, sigma, rho, mask):
             # Calculate likelihood
             kernel = terms.Matern32Term(sigma=sigma, rho=rho)
             # The exoplanet.gp.GP constructor takes an optional argument J which 
             # specifies the width of the problem if it is known at compile time. 
             # This is actually two times the J from the celerite paper
-            gp = GP(kernel, t, varF, J=2) # J=2 for Matern32 kernel
+            gp = GP(kernel, t[mask.nonzero()], varF[mask.nonzero()], J=2) # J=2 for Matern32 kernel
 
             # Add a custom "potential" (log probability function) with the 
             # GP likelihood
-            ll = gp.log_likelihood(r)
+            ll = gp.log_likelihood(r[mask.nonzero()])
 
             return ll
 
@@ -475,7 +485,7 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
         result, updates = theano.scan(fn=log_likelihood_for_single_band,
                                 outputs_info=None,
                                 sequences=[self.t, self.r, self.varF,
-                                         self.sigma, self.rho])
+                                         self.sigma, self.rho, self.mask])
 
         # Sum over all bands
         return T.sum(result)
