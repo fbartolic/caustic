@@ -23,7 +23,7 @@ event.tables[1].remove_rows(np.argwhere(~mask2))
 event.tables[2].remove_rows(np.argwhere(~mask3))
 
 # Load trace
-output_dir = 'output/' + event.event_name + '/PointSourcePointLensWN1/' 
+output_dir = 'output/' + event.event_name + '/PointSourcePointLensMatern32/' 
 
 # Plot non-GP models
 fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
@@ -32,7 +32,7 @@ fig.subplots_adjust(hspace=0.05)
 
 
 plot_model_and_residuals(ax, event, 
-    PointSourcePointLensWhiteNoise1(event), output_dir + 'model.trace')
+    PointSourcePointLensMatern32(event), output_dir + 'model.trace')
 plt.savefig(output_dir + 'model.png')
 
 plt.show()
