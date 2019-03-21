@@ -58,14 +58,14 @@ class PointSourcePointLens(pm.Model):
 
         # Initialize linear parameters
         self.Delta_F = BoundedNormal('Delta_F', 
-            mu=5.*T.ones((self.n_bands, 1)),
-            sd=2.*T.ones((self.n_bands, 1)),
+            mu=10.*T.ones((self.n_bands, 1)),
+            sd=10.*T.ones((self.n_bands, 1)),
             testval=5.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
         self.F_base = pm.Normal('F_base', 
             mu=T.zeros((self.n_bands, 1)), 
-            sd=0.01*T.ones((self.n_bands, 1)),
+            sd=0.1*T.ones((self.n_bands, 1)),
             testval=T.zeros((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
@@ -86,14 +86,14 @@ class PointSourcePointLens(pm.Model):
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
             BoundedNormal.dist(
-                mu=5*T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
+                mu=10*T.ones((self.n_bands, 1)),
+                sd=10.*T.ones((self.n_bands, 1)),
                 testval=3.*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.Delta_F))
         self.logp_F_base = pm.Deterministic('logp_F_base',
             pm.Normal.dist(
                 mu=T.zeros((self.n_bands, 1)), 
-                sd=0.01*T.ones((self.n_bands, 1)),
+                sd=0.1*T.ones((self.n_bands, 1)),
                 testval=T.zeros((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
