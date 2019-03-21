@@ -93,11 +93,11 @@ class PointSourcePointLens(pm.Model):
         self.logp_F_base = pm.Deterministic('logp_F_base',
             pm.Normal.dist(
                 mu=T.zeros((self.n_bands, 1)), 
-                sd=0.1*T.ones((self.n_bands, 1)),
+                sd=0.6*T.ones((self.n_bands, 1)),
                 testval=T.zeros((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(T.min(self.t), T.max(self.t)).logp(self.t0))
+            pm.Uniform.dist(T.min(self.t[0]), T.max(self.t[0])).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
             BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
