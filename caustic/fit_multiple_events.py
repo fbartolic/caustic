@@ -7,7 +7,6 @@ import os, random
 import sys
 import exoplanet as xo
 
-
 from data import OGLEData
 from models import PointSourcePointLensMatern32
 from models import PointSourcePointLensWhiteNoise1
@@ -34,6 +33,7 @@ def fit_model(model, output_dir, n_tune=2000, n_sample=2000):
     # I don't really understand how context managers worOGLEk
     with model as model_instance:
         print("Free parameters: ", model.free_parameters)
+        print("Free parameter values: ", model.test_point)
         print("Initial values of logp for each parameter: ", 
             model.initial_logps)
 
@@ -76,7 +76,7 @@ random.seed(42)
 
 events = []  # data for each event
 
-data_path = '/home/star/fb90/data/OGLE_ews/2017/'
+data_path = '/home/fran/data/OGLE_ews/2017/'
 dirs = []
 for directory in os.listdir(data_path):
     dirs.append(directory)
@@ -103,7 +103,6 @@ for event in events:
     output_dir4 = 'output/' + event.event_name +\
          '/PointSourcePointLensMatern32'
 
-
     # Create output directory
     if not os.path.exists(output_dir1):
         os.makedirs(output_dir1)
@@ -114,7 +113,6 @@ for event in events:
     if not os.path.exists(output_dir4):
         os.makedirs(output_dir4)
 
-
     # Plot data and save theplot
     fig, ax = plt.subplots(figsize=(25, 10))
     event.plot(ax)
@@ -122,5 +120,5 @@ for event in events:
 
 #    fit_model(PointSourcePointLensWhiteNoise1(event), output_dir1)
 #    fit_model(PointSourcePointLensWhiteNoise2(event), output_dir2)
-#    fit_model(PointSourcePointLensWhiteNoise3(event), output_dir3)
-    fit_model(PointSourcePointLensMatern32(event), output_dir4)
+    fit_model(PointSourcePointLensWhiteNoise3(event), output_dir3)
+#    fit_model(PointSourcePointLensMatern32(event), output_dir4)

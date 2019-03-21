@@ -59,8 +59,8 @@ class PointSourcePointLens(pm.Model):
         # Initialize linear parameters
         self.Delta_F = BoundedNormal('Delta_F', 
             mu=5.*T.ones((self.n_bands, 1)),
-            sd=1.*T.ones((self.n_bands, 1)),
-            testval=3.*T.ones((self.n_bands, 1)),
+            sd=2.*T.ones((self.n_bands, 1)),
+            testval=5.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
         self.F_base = pm.Normal('F_base', 
@@ -75,10 +75,9 @@ class PointSourcePointLens(pm.Model):
         t0_guess_idx = T.argmin(
             T.abs_(T.flatten(self.F) - T.max(T.flatten(self.F)))
         )
-        self.t0 = pm.Uniform('t0', T.min(self.t), T.max(self.t), 
-            testval=7995.) 
-            #testval=T.flatten(self.t)[t0_guess_idx])
-        self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
+        self.t0 = pm.Uniform('t0', T.min(self.t[0]), T.max(self.t[0]), 
+            testval=T.flatten(self.t)[t0_guess_idx])
+        self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.1)
         self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
         
         # Deterministic transformations
@@ -87,14 +86,14 @@ class PointSourcePointLens(pm.Model):
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
             BoundedNormal.dist(
-                mu=T.max(self.F)*T.ones((self.n_bands, 1)),
-                sd=1.*T.ones((self.n_bands, 1)),
+                mu=5*T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
                 testval=3.*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.Delta_F))
         self.logp_F_base = pm.Deterministic('logp_F_base',
             pm.Normal.dist(
                 mu=T.zeros((self.n_bands, 1)), 
-                sd=0.1*T.ones((self.n_bands, 1)),
+                sd=0.01*T.ones((self.n_bands, 1)),
                 testval=T.zeros((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
@@ -173,7 +172,7 @@ class PointSourcePointLens(pm.Model):
         # are matrices so `fn` operates on vectors, such as time and flux.
         result, updates = theano.scan(fn=log_likelihood_for_single_band,
                                 outputs_info=None,
-                                sequences=[self.r, self.varF])
+                                sequences=[self.r, self.varF, self.mask])
 
         # Sum over all bands
         return T.sum(result)
@@ -197,6 +196,24 @@ class PointSourcePointLens(pm.Model):
                         self.F_base[n]
 
                 model_prediction[n, i] = xo.eval_in_model(pred, sample)
+            
+        return model_prediction
+
+    def evaluate_map_model_on_grid(self, t_grid, map_point):
+        """
+        Evaluates model on dense grid for N_pred random samples from the 
+        posterior.
+        
+        """
+        model_prediction = np.zeros((self.n_bands, len(t_grid)))
+        t_grid = T._shared(t_grid)
+
+        for n in range(self.n_bands):
+            # Tensor which is to be evaluated in model context
+            pred = self.Delta_F[n]*self.magnification(t_grid) +\
+                    self.F_base[n]
+
+            model_prediction[n] = xo.eval_in_model(pred, map_point)
             
         return model_prediction
 
@@ -391,7 +408,7 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
         self.rho = pm.InverseGamma('rho', 
             alpha = T._shared(invgamma_a)*T.ones((self.n_bands, 1)),
             beta = T._shared(invgamma_b)*T.ones((self.n_bands, 1)),
-            testval=0.5*T.ones((self.n_bands, 1)),
+            testval=2.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
         # Save log prior for each parameter, this is needed for hierarchical
@@ -530,6 +547,46 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
                     xo.eval_in_model(mean_func, sample) 
             
         return model_prediction
+
+    def evaluate_map_model_on_grid(self, t_grid, map_point):
+        """
+        Evaluates GP model on dense grid for N_pred random samples from the 
+        posterior.
+        
+        """
+        model_prediction = np.zeros((self.n_bands, len(t_grid)))
+        t_grid = T._shared(t_grid)
+
+        for n in range(self.n_bands):
+            # Evaluate mean function at observed times
+            mag_obs = self.magnification(self.t[n])
+            mean_func_obs = self.Delta_F[n]*mag_obs + self.F_base[n]
+
+            # Evaluate mean function on fine grid
+            mag = self.magnification(t_grid) 
+            mean_func = self.Delta_F[n]*mag + self.F_base[n]
+            
+            # Diagonal terms of the covariance matrix
+            varF = T.pow(self.A[n]*self.sigF[n], 2) +\
+                    T.pow(mag_obs*self.B[n], 2)
+
+            # Initialize kernel and gp object
+
+            kernel = terms.Matern32Term(sigma=self.sigma[n], 
+                rho=self.rho[n])
+            gp = GP(kernel, self.t[n], varF, J=2)
+
+            # Calculate log_likelihood 
+            r = self.F[n] - mean_func_obs
+            gp.log_likelihood(r)
+
+            # Evaluate tensors in model context
+            model_prediction[n] =\
+                xo.eval_in_model(gp.predict(t_grid), map_point) +\
+                xo.eval_in_model(mean_func, map_point) 
+        
+        return model_prediction
+
 
 #class PointSourcePointLensMarginalized(pm.Model):
 #    def __init__(self, data, name='', model=None):
