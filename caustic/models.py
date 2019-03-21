@@ -57,15 +57,15 @@ class PointSourcePointLens(pm.Model):
         BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
 
         # Initialize linear parameters
-        self.Delta_F = BoundedNormal('Delta_F', 
+        self.Delta_F = pm.Lognormal('Delta_F', 
             mu=10.*T.ones((self.n_bands, 1)),
-            sd=10.*T.ones((self.n_bands, 1)),
+            sd=15.*T.ones((self.n_bands, 1)),
             testval=5.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
         self.F_base = pm.Normal('F_base', 
             mu=T.zeros((self.n_bands, 1)), 
-            sd=0.1*T.ones((self.n_bands, 1)),
+            sd=0.6*T.ones((self.n_bands, 1)),
             testval=T.zeros((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
@@ -77,7 +77,7 @@ class PointSourcePointLens(pm.Model):
         )
         self.t0 = pm.Uniform('t0', T.min(self.t[0]), T.max(self.t[0]), 
             testval=T.flatten(self.t)[t0_guess_idx])
-        self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.1)
+        self.u0 = BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
         self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
         
         # Deterministic transformations
@@ -85,9 +85,9 @@ class PointSourcePointLens(pm.Model):
 
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            BoundedNormal.dist(
+            pm.Lognormal.dist(
                 mu=10*T.ones((self.n_bands, 1)),
-                sd=10.*T.ones((self.n_bands, 1)),
+                sd=15.*T.ones((self.n_bands, 1)),
                 testval=3.*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.Delta_F))
         self.logp_F_base = pm.Deterministic('logp_F_base',
@@ -99,7 +99,7 @@ class PointSourcePointLens(pm.Model):
         self.logp_t0 = pm.Deterministic('logp_t0',
             pm.Uniform.dist(T.min(self.t), T.max(self.t)).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
-            BoundedNormal.dist(mu=0., sd=1.).logp(self.u0))
+            BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
             BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
@@ -330,7 +330,7 @@ class PointSourcePointLensWhiteNoise3(PointSourcePointLens):
 
         self.B = BoundedNormal('B', 
             mu=T.zeros((self.n_bands, 1)), 
-            sd=1*T.ones((self.n_bands, 1)),
+            sd=5*T.ones((self.n_bands, 1)),
             testval=0.01*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
@@ -345,7 +345,7 @@ class PointSourcePointLensWhiteNoise3(PointSourcePointLens):
         self.logp_B = pm.Deterministic('logp_B',
             pm.Normal.dist(
                 mu=T.zeros((self.n_bands, 1)), 
-                sd=1*T.ones((self.n_bands, 1)),
+                sd=5*T.ones((self.n_bands, 1)),
                 testval=0.01*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.B))
 
