@@ -15,6 +15,7 @@ class Data(object):
     """
     def __init__(self, event_dir=""):
         self.tables = []
+        self.masks = []
         self.event_name = ""
         self.coordinates = None
         self.units = 'magnitudes' # units have to be the same across all bands
@@ -179,12 +180,15 @@ class Data(object):
         # Subtract the median from the data such that baseline is at approx 
         # zero, rescale the data such that it has unit variance
         stanardized_data = []
-        for table in self.tables:
-            table_std = table.copy()
-            table_std['flux'] = (table['flux'] -\
-                np.median(table['flux']))/np.std(table['flux'])
-            table_std['flux_err'] = table['flux_err']/np.std(table['flux'])
-            table_std['HJD'] = table['HJD'] - 2450000
+        for i, table in enumerate(self.tables):
+            mask = self.masks[i]
+
+            table_std = Table()
+            table_std.meta = table.meta
+            table_std['flux'] = (table['flux'][mask] -\
+                np.median(table['flux'][mask]))/np.std(table['flux'][mask])
+            table_std['flux_err'] = table['flux_err'][mask]/np.std(table['flux'][mask])
+            table_std['HJD'] = table['HJD'][mask] - 2450000
             stanardized_data.append(table_std)
 
         return stanardized_data
@@ -200,10 +204,19 @@ class Data(object):
         """
         if (self.units=='fluxes'):
             for i, table in enumerate(self.tables):
-                ax.errorbar(table['HJD'] - 2450000, table['flux'], 
-                    table['flux_err'], fmt='.', color='C' + str(i), 
+                mask = self.masks[i]
+
+                # Plot data
+                ax.errorbar(table['HJD'][mask] - 2450000, table['flux'][mask], 
+                    table['flux_err'][mask], fmt='.', color='C' + str(i), 
                     label=table.meta['band'], ecolor='C' + str(i))
                 ax.set_ylabel('flux')
+
+                # Plot outliers
+                ax.errorbar(table['HJD'][~mask] - 2450000,
+                    table['flux'][~mask], 
+                    table['flux_err'][~mask], fmt='.', color='C' + str(i),
+                    ecolor='C' + str(i), alpha=0.15)
         else:
             for i, table in enumerate(self.tables):
                 ax.errorbar(table['HJD'] - 2450000, table['mag'], 
@@ -224,11 +237,10 @@ class Data(object):
         Parameters
         ----------
         ax : Matplotlib axes object
-        
-        mask : Integer array
         """
         std_tables = self.get_standardized_data()
 
+        # Plot masked data
         for i, table in enumerate(std_tables):
             ax.errorbar(table['HJD'], table['flux'], 
                 table['flux_err'], fmt='.', color='C' + str(i), 
@@ -239,6 +251,24 @@ class Data(object):
         ax.set_xlabel('HJD - 2450000')
         ax.set_ylabel('Flux (rescaled)')
         ax.legend(prop={'size': 16})
+
+    def remove_worst_outliers(self, window_size=7, mad_cutoff=5):
+        tables = self.tables
+        for i, table in enumerate(tables):
+            series = pd.Series(table['flux']) 
+            mad = lambda x: 1.4826*np.median(np.abs(x - np.median(x)))
+            rolling_mad = np.array(series.rolling(window_size, center=True).apply(mad))
+            rolling_mad[-window_size//2:] = rolling_mad[-window_size//2]
+            rolling_mad[:window_size//2] = rolling_mad[window_size//2]
+            rolling_median = np.array(series.rolling(window_size, center=True).median())
+            rolling_median[-window_size//2:] = rolling_median[-window_size//2]
+            rolling_median[:window_size//2] = rolling_median[window_size//2]
+            
+            array = np.abs((np.array(table['flux']) - rolling_median)/rolling_mad)
+            mask = array > 5
+            
+            # Update masks
+            self.masks[i] = ~mask
             
 class OGLEData(Data):
     """Subclass of data class for dealing with OGLE data."""
@@ -354,3 +384,6 @@ class KMTData(Data):
         t3.meta = {'band':'KMTS_I', 'observatory':'KMTNet'}
 
         self.tables = [t1, t2, t3]
+        self.masks = [np.ones(len(t1['HJD']), dtype=bool), 
+            np.ones(len(t2['HJD']), dtype=bool),
+            np.ones(len(t3['HJD']), dtype=bool)]

@@ -78,8 +78,11 @@ def qq_plot(ax, residuals):
 def plot_model_and_residuals(ax, event, pm_model, trace_path):
     # Load standardized data
     tables = event.get_standardized_data()
-    t_grid = np.linspace(tables[0]['HJD'][0], 
-            tables[0]['HJD'][-1], 2000)
+#    t_grid = np.linspace(tables[0]['HJD'][0], 
+#            tables[0]['HJD'][-1], 2000)
+    t_grid = np.linspace(7950,
+            8050, 500)
+
 
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
@@ -109,6 +112,38 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path):
             [16, 50, 84], axis=1)
 
         residuals =  tables[n]['flux'] - quantile_predictions[1, n, :]
+        ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
+            fmt='.', color='C' + str(n))
+        ax[1].grid(True)
+
+def plot_map_model_and_residuals(ax, event, pm_model, map_point):
+    # Load standardized data
+    tables = event.get_standardized_data()
+    t_grid = np.linspace(tables[0]['HJD'][0], 
+            tables[0]['HJD'][-1], 2000)
+
+    # Compute model predictions on a fine grid and at observed times
+    with pm_model as model_instance:
+        pred = model_instance.evaluate_map_model_on_grid(t_grid, map_point)
+        pred_at_observed_times = [model_instance.evaluate_map_model_on_grid(
+            table['HJD'], map_point) for table in tables]
+
+    # Plot data
+    event.plot_standardized_data(ax[0])
+    ax[0].set_xlabel(None)
+    ax[1].set_xlabel('HJD - 2450000')
+    ax[1].set_ylabel('Residuals')
+
+    n_bands = len(tables)
+
+    # Plot predictions for various samples
+    for n in range(n_bands): # iterate over bands
+        ax[0].plot(t_grid, pred[n, :], color='C' + str(n), alpha=0.5)
+        print(pred[n, :])
+
+    # Calculate and plot residuals
+    for n in range(n_bands): # iterate over bands
+        residuals =  tables[n]['flux'] - pred_at_observed_times[n][n]
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
             fmt='.', color='C' + str(n))
         ax[1].grid(True)

@@ -7,9 +7,9 @@ import exoplanet as xo
 
 from data import KMTData
 from models import PointSourcePointLensMatern32
-from models import PointSourcePointLensWhiteNoise1
-from models import PointSourcePointLensWhiteNoise2
 from models import PointSourcePointLensWhiteNoise3
+from models import OutlierRemovalModel
+from utils import plot_map_model_and_residuals
 
 def save_summary_stats(trace, output_dir):
         df = pm.summary(trace)
@@ -28,7 +28,7 @@ def fit_model(model, output_dir, n_tune=2000, n_sample=2000):
 
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
 
-    # I don't really understand how context managers worOGLEk
+    # I don't really understand how context managers work
     with model as model_instance:
         print("Free parameters: ", model.free_parameters)
         print("Initial values of logp for each parameter: ", 
@@ -71,39 +71,43 @@ def fit_model(model, output_dir, n_tune=2000, n_sample=2000):
 
 random.seed(42)
 
-kmt_dir = '/home/star/fb90/data/KMT/kmtnet/2017/2017/KB170008'
+kmt_dir = '/home/fran/data/KMT/kmtnet/2017/2017/KB170009'
 event = KMTData(kmt_dir)
-tables = event.get_standardized_data()
-event.event_name = 'KMTKB170008'
+event.event_name = 'KMTKB170009'
 
-# Remove outliers from data
-mask1 = (tables[0]['flux'] < 4) & (tables[0]['flux']  > -1)
-mask2 = (tables[1]['flux']  < 4) & (tables[1]['flux']  > -1)
-mask3 = (tables[2]['flux']  < 4) & (tables[2]['flux']  > -1)
+# Remove worst outliers
+event.remove_worst_outliers()
+#event.tables = [event.tables[2]]
+#event.masks = [event.masks[2]]
 
-event.tables[0].remove_rows(np.argwhere(~mask1))
-event.tables[1].remove_rows(np.argwhere(~mask2))
-event.tables[2].remove_rows(np.argwhere(~mask3))
+# Plot data
+fig, ax = plt.subplots(figsize=(25, 10))
+event.plot_standardized_data(ax)
 
-#event.tables = [event.tables[1]]
+## Optimize the GP model to remove outliers
+#with OutlierRemovalModel(event) as model:
+#    start = model.test_point
+#    map_soln = xo.optimize(start=start, vars=[model.F_base])
+#    map_soln = xo.optimize(start=map_soln, vars=[model.Delta_F])
+#    map_soln = xo.optimize(start=map_soln, vars=[model.u0])
+#    map_soln = xo.optimize(start=map_soln, vars=[model.t0])
+#    map_soln = xo.optimize(start=map_soln, vars=[model.t0, model.teff])
+#    map_soln = xo.optimize(start=map_soln)
+#
+#print(map_soln)
+
+#fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+#    figsize=(25, 10), sharex=True)
+#fig.subplots_adjust(hspace=0.05)
+#
+#plot_map_model_and_residuals(ax, event, model, map_soln)
+#plt.show()
 
 # Define output directories
-output_dir1 = 'output/' + event.event_name +\
-        '/PointSourcePointLensWN1'
-output_dir2 = 'output/' + event.event_name +\
-        '/PointSourcePointLensWN2'
-output_dir3 = 'output/' + event.event_name +\
-        '/PointSourcePointLensWN3'
 output_dir4 = 'output/' + event.event_name +\
         '/PointSourcePointLensMatern32'
 
 # Create output directory
-if not os.path.exists(output_dir1):
-    os.makedirs(output_dir1)
-if not os.path.exists(output_dir2):
-    os.makedirs(output_dir2)
-if not os.path.exists(output_dir3):
-    os.makedirs(output_dir3)
 if not os.path.exists(output_dir4):
     os.makedirs(output_dir4)
 
@@ -115,4 +119,4 @@ if not os.path.exists(output_dir4):
 #fit_model(PointSourcePointLensWhiteNoise1(event), output_dir1)
 #    fit_model(PointSourcePointLensWhiteNoise2(event), output_dir2)
 #    fit_model(PointSourcePointLensWhiteNoise3(event), output_dir3)
-fit_model(PointSourcePointLensMatern32(event), output_dir4)
+fit_model(PointSourcePointLensWhiteNoise3(event), output_dir4)
