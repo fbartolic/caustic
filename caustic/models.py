@@ -281,8 +281,6 @@ class OutlierRemovalModel(pm.Model):
             
         return model_prediction
 
-
-
 class PointSourcePointLens(pm.Model):
     """
     Skeleton class for a PSPL model. Classes which inherit from this class 
@@ -290,7 +288,8 @@ class PointSourcePointLens(pm.Model):
     `log_likelihood` method.
     """
     #  override __init__ function from pymc3 Model class
-    def __init__(self, data, name='', model=None):
+    def __init__(self, data, errorbar_rescaling='constant', 
+        name='', model=None):
         super(PointSourcePointLens, self).__init__(name, model)
 
         # Load and rescale the data to zero median and unit variance
@@ -333,6 +332,7 @@ class PointSourcePointLens(pm.Model):
             sd=15.*T.ones((self.n_bands, 1)),
             testval=5.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
+        
 
         self.F_base = pm.Normal('F_base', 
             mu=T.zeros((self.n_bands, 1)), 
@@ -343,12 +343,8 @@ class PointSourcePointLens(pm.Model):
         # Initialize non-linear parameters
         ## Posterior is multi-modal in t0 and it's critical that the it is 
         ## initialized near the true value
-        t0_guess_idx = T.argmin(
-            T.abs_(T.flatten(self.F) - T.max(T.flatten(self.F)))
-        )
         self.t0 = pm.Uniform('t0', T.min(self.t[0]), T.max(self.t[0]), 
-#            testval=T.flatten(self.t)[t0_guess_idx])
-            testval=7827.5)
+            testval=self.t0_guess(data))
         self.u0 = BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
         self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
         
@@ -375,9 +371,107 @@ class PointSourcePointLens(pm.Model):
         self.logp_teff = pm.Deterministic('logp_teff', 
             BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
+        # Compute the likelihood function
+        mag = self.magnification(self.t) 
+        mean_func = self.Delta_F*mag +  self.F_base # mean function
+
+        # Residuals
+        self.r = self.F - mean_func
+
+        if (errorbar_rescaling=='constant'):
+            # Define custom prior distributions 
+            BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
+            BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+            ## Noise model parameters
+            self.A = BoundedNormal1('A', 
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            ## Save log prior for each parameter for hierarhical modeling 
+            self.logp_A = pm.Deterministic('logp_A',
+                pm.Normal.dist(
+                    mu=T.ones((self.n_bands, 1)),
+                    sd=2.*T.ones((self.n_bands, 1)),
+                    testval=1.5*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.A))
+            
+            # Diagonal terms of the covariance matrix
+            self.varF = T.pow(self.A*self.sigF, 2) 
+
+        if (errorbar_rescaling=='additive_variance'):
+            ## Noise model parameters
+            self.A = BoundedNormal1('A', 
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            self.B = BoundedNormal('B', 
+                mu=T.zeros((self.n_bands, 1)), 
+                sd=1*T.ones((self.n_bands, 1)),
+                testval=0.01*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            ## Save log prior for each parameter for hierarhical modeling 
+            self.logp_A = pm.Deterministic('logp_A',
+                pm.Normal.dist(
+                    mu=T.ones((self.n_bands, 1)),
+                    sd=2.*T.ones((self.n_bands, 1)),
+                    testval=1.5*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.A))
+            self.logp_B = pm.Deterministic('logp_B',
+                pm.Normal.dist(
+                    mu=T.zeros((self.n_bands, 1)), 
+                    sd=1*T.ones((self.n_bands, 1)),
+                    testval=0.01*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.B))
+
+            # Diagonal terms of the covariance matrix
+            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
+
+        if (errorbar_rescaling=='flux_dependant'):
+            ## Noise model parameters
+            self.A = BoundedNormal1('A', 
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            self.B = BoundedNormal('B', 
+                mu=T.zeros((self.n_bands, 1)), 
+                sd=5*T.ones((self.n_bands, 1)),
+                testval=0.01*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            ## Save log prior for each parameter for hierarhical modeling 
+            self.logp_A = pm.Deterministic('logp_A',
+                pm.Normal.dist(
+                    mu=T.ones((self.n_bands, 1)),
+                    sd=2.*T.ones((self.n_bands, 1)),
+                    testval=1.5*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.A))
+            self.logp_B = pm.Deterministic('logp_B',
+                pm.Normal.dist(
+                    mu=T.zeros((self.n_bands, 1)), 
+                    sd=5*T.ones((self.n_bands, 1)),
+                    testval=0.01*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.B))
+
+            # Diagonal terms of the covariance matrix
+            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
+
+        pm.Potential('likelihood', self.log_likelihood())
+
         # Save names of most important parameters in the model
         self.param_names = ['t0', 'u0', 'tE']
-        
+
+        # Define helpful class attributes
+        self.free_parameters = [RV.name for RV in self.basic_RVs]
+        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+
     def magnification(self, t):
         """
         Calculates the PSPL magnification fraction [A(u) - 1]/[A(u0) - 1]
@@ -491,157 +585,15 @@ class PointSourcePointLens(pm.Model):
             model_prediction[n] = xo.eval_in_model(pred, map_point)
             
         return model_prediction
-
-class PointSourcePointLensWhiteNoise1(PointSourcePointLens):
-    def __init__(self, data, name='', model=None):
-        super(PointSourcePointLensWhiteNoise1, self).__init__(data, name)
-
-        # Define custom prior distributions 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
-        ## Noise model parameters
-        self.A = BoundedNormal1('A', 
-            mu=T.ones((self.n_bands, 1)),
-            sd=2.*T.ones((self.n_bands, 1)),
-            testval=1.5*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        ## Save log prior for each parameter for hierarhical modeling 
-        self.logp_A = pm.Deterministic('logp_A',
-            pm.Normal.dist(
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.A))
-        
-        # Compute the likelihood function
-        mag = self.magnification(self.t) 
-        mean_func = self.Delta_F*mag +  self.F_base # mean function
-
-        # Residuals
-        self.r = self.F - mean_func
-
-        # Diagonal terms of the covariance matrix
-        self.varF = T.pow(self.A*self.sigF, 2) 
-
-        pm.Potential('likelihood', self.log_likelihood())
-
-        # Define helpful class attributes
-        self.free_parameters = [RV.name for RV in self.basic_RVs]
-        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
-
-        # Save names of most important parameters in the model
-        self.param_names += ['A']
-
-class PointSourcePointLensWhiteNoise2(PointSourcePointLens):
-    def __init__(self, data, name='', model=None):
-        super(PointSourcePointLensWhiteNoise2, self).__init__(data, name)
-
-        # Define custom prior distributions 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
-        ## Noise model parameters
-        self.A = BoundedNormal1('A', 
-            mu=T.ones((self.n_bands, 1)),
-            sd=2.*T.ones((self.n_bands, 1)),
-            testval=1.5*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        self.B = BoundedNormal('B', 
-            mu=T.zeros((self.n_bands, 1)), 
-            sd=1*T.ones((self.n_bands, 1)),
-            testval=0.01*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        ## Save log prior for each parameter for hierarhical modeling 
-        self.logp_A = pm.Deterministic('logp_A',
-            pm.Normal.dist(
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.A))
-        self.logp_B = pm.Deterministic('logp_B',
-            pm.Normal.dist(
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=1*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.B))
-
-        # Compute the likelihood function
-        mag = self.magnification(self.t) 
-        mean_func = self.Delta_F*mag +  self.F_base # mean function
-
-        # Residuals
-        self.r = self.F - mean_func
-
-        # Diagonal terms of the covariance matrix
-        self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
-
-        pm.Potential('likelihood', self.log_likelihood())
-
-        # Define helpful class attributes
-        self.free_parameters = [RV.name for RV in self.basic_RVs]
-        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
-
-        # Save names of most important parameters in the model
-        self.param_names += ['A', 'B']
-
-class PointSourcePointLensWhiteNoise3(PointSourcePointLens):
-    def __init__(self, data, name='', model=None):
-        super(PointSourcePointLensWhiteNoise3, self).__init__(data, name)
-
-        # Define custom prior distributions 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
-        ## Noise model parameters
-        self.A = BoundedNormal1('A', 
-            mu=T.ones((self.n_bands, 1)),
-            sd=2.*T.ones((self.n_bands, 1)),
-            testval=1.5*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        self.B = BoundedNormal('B', 
-            mu=T.zeros((self.n_bands, 1)), 
-            sd=5*T.ones((self.n_bands, 1)),
-            testval=0.01*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-
-        ## Save log prior for each parameter for hierarhical modeling 
-        self.logp_A = pm.Deterministic('logp_A',
-            pm.Normal.dist(
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.A))
-        self.logp_B = pm.Deterministic('logp_B',
-            pm.Normal.dist(
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=5*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.B))
-
-        # Compute the likelihood function
-        mag = self.magnification(self.t) 
-        mean_func = self.Delta_F*mag +  self.F_base # mean function
-
-        # Residuals
-        self.r = self.F - mean_func
-
-        # Diagonal terms of the covariance matrix
-        self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
-
-        pm.Potential('likelihood', self.log_likelihood())
-
-        # Define helpful class attributes
-        self.free_parameters = [RV.name for RV in self.basic_RVs]
-        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
-
-        # Save names of most important parameters in the model
-        self.param_names += ['A', 'B']
+    
+    def t0_guess(self, event):
+        tmp = event.masks 
+        event.remove_worst_outliers(window_size=30, mad_cutoff=2)
+        tables = event.get_standardized_data()
+        fluxes = np.concatenate([table['flux'] for table in tables])
+        times = np.concatenate([table['HJD'] for table in tables])
+        event.masks = tmp
+        return np.median(times[fluxes > 4])
 
 class PointSourcePointLensMatern32(PointSourcePointLens):
     def __init__(self, data):
@@ -862,125 +814,187 @@ class PointSourcePointLensMatern32(PointSourcePointLens):
         
         return model_prediction
 
+class PointSourcePointLensMarginalized(pm.Model):
+    def __init__(self, data, name='', model=None):
+        super(PointSourcePointLensMarginalized, self).__init__(name, model)
 
-#class PointSourcePointLensMarginalized(pm.Model):
-#    def __init__(self, data, name='', model=None):
-#        super(PointSourcePointLensMarginalized, self).__init__(name, model)
-#
-#        # Load and pre-process the data 
-#        data.convert_data_to_fluxes()
-#        df = data.get_standardized_data()
-#        self.t = df['HJD - 2450000'].values
-#        self.F = df['I_flux'].values
-#        self.sigF = df['I_flux_err'].values
-#
-#        # Define custom prior distributions 
-#        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-#        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-#
-#        # Define model parameters and their associated priors
-#        ## Posterior is multi-modal in t0 and it's critical that the it is 
-#        ## initialized near the true value
-#        t0_guess_idx = (np.abs(self.F - np.max(self.F))).argmin() 
-#        self.t0 = pm.Uniform('t0', self.t[0], self.t[-1], 
-#            testval=self.t[t0_guess_idx])
-#        self.u0 = BoundedNormal('u0', mu=0., sd=1., testval=0.5)
-#        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
-#        
-#        # Deterministic transformations
-#        self.tE = pm.Deterministic("tE", self.teff/self.u0) 
-#
-#        # Noise model parameters
-#        self.K = BoundedNormal1('K', mu=1., sd=2., testval=1.5)
-#
-#        # Save log prior for each parameter, this is needed for hierarchical
-#        # modeling of multiple events using the importance resampling trick
-#        self.logp_t0 = pm.Deterministic('logp_t0',
-#            pm.Uniform.dist(self.t[0], self.t[-1]).logp(self.t0))
-#        self.logp_u0 = pm.Deterministic('logp_u0', 
-#            BoundedNormal.dist(mu=0., sd=1.).logp(self.u0))
-#        self.logp_teff = pm.Deterministic('logp_teff', 
-#            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
-#        self.logp_K = pm.Deterministic('logp_K',
-#            BoundedNormal1.dist( mu=1., sd=2.).logp(self.K))
-#        self.log_posterior = pm.Deterministic("log_posterior", self.logpt)
-#
-#        # Define helpful class attributes
-#        self.free_parameters = [RV.name for RV in self.basic_RVs]
-#        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
-#
-#        # Define the likelihood function~
-#        pm.Potential('likelihood', self.marginalized_likelihood())
-#
-#    def marginalized_likelihood(self):
-#        """Gaussian likelihood funciton marginalized over the linear parameters.
-#        """
-#        N = len(self.F)        
-#        F = T._shared(self.F)
-#
-#        # Linear parameter matrix
-#        mag_vector = self.magnification()
-##        mu_theta = T.dot(mag_vector, np.max(self.F))
-#        A = T.stack([mag_vector, T.ones(N)], axis=1)
-#
-#        # Covariance matrix
-#        C_diag = T.pow(self.K*T._shared(self.sigF), 2.)
-#        C = T.nlinalg.diag(C_diag)
-#
-#        # Prior matrix
-#        sigDelta_F = 10.
-#        sigF_base = 0.1
-#        L_diag = T._shared(np.array([sigDelta_F, sigF_base])**2.)
-#        L = T.nlinalg.diag(L_diag)
-#
-#        # Calculate inverse of covariance matrix for marginalized likelihood
-#        inv_C = T.nlinalg.diag(T.pow(C_diag, -1.))
-#        inv_L = T.nlinalg.diag(T.pow(L_diag, -1.))
-#        term1 = T.dot(A.transpose(), inv_C) 
-#        term2 = inv_L + T.dot(A.transpose(), T.dot(inv_C, A))
-#        term3 = T.dot(inv_C, A)
-#        inv_SIGMA = inv_C - T.dot(term3, T.dot(T.nlinalg.matrix_inverse(term2),
-#             term1))
-#
-#        # Calculate determinant of covariance matrix for marginalized likelihood
-#        det_C = C_diag.prod() 
-#        det_L = L_diag.prod() 
-#        det_SIGMA = det_C*det_L*T.nlinalg.det(term2)
-#
-#        # Calculate marginalized likelihood
-#        r = F #- mu_theta
-#        return -0.5*T.dot(r.transpose(), T.dot(inv_SIGMA, r)) -\
-#               0.5*N*np.log(2*np.pi) - 0.5*np.log(det_SIGMA)
-#
-#    def magnification(self):
-#        """Return the mean function which goes into the likeliood."""
-#        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
-#        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-#
-#        return (A(u) - 1)/(A(self.u0) - 1) 
-#
-#    def revert_flux_params_to_nonstandardized_format(self, data):
-#        # Revert F_base and Delta_F to non-standardized units
-#        median_F = np.median(data.df['I_flux'].values)
-#        std_F = np.std(data.df['I_flux'].values)
-#
-#        Delta_F_ = std_F*self.Delta_F + median_F
-#        F_base_ = std_F*self.Delta_F + median_F
-#
-#        # Calculate source flux and blend flux
-#        FS = Delta_F_/(self.peak_mag() - 1)
-#        FB = (F_base_ - FS)/FS
-#
-#        # Convert fluxes to magnitudes
-#        mu_m, sig_m = data.fluxes_to_magnitudes(np.array([FS, FB]), 
-#            np.array([0., 0.]))
-#        mag_source, mag_blend = mu_m
-#
-#        return mag_source, mag_blend
-#
-#    def peak_mag(self):
-#        """Returns PSPL magnification at u=u0."""
-#        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
-#        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-#
-#        return A(self.u0)
+        # Load and rescale the data to zero median and unit variance
+        tables = data.get_standardized_data()
+        self.n_bands = len(tables) # number of photometric bands
+
+        ## To avoid loops, we pad the arrays with additional values, in
+        ## particular, we padd the flux arrays with very large values such
+        ## the likelihood for those points is zero. The final shape of the
+        ## arrays is (self.n_bands, n_datapoints) and we can iterate over the bands
+        n_max =  np.max([len(table) for table in tables])
+        self.t = T._shared(np.stack([np.pad(table['HJD'], 
+            (0, n_max - len(table['HJD'])), 'constant', 
+            constant_values=(0.,)) for table in tables]))
+        self.F = T._shared(np.stack([np.pad(table['flux'], 
+            (0, n_max - len(table['flux'])), 'constant',
+            constant_values=(0.,)) for table in tables]))
+        self.sigF = T._shared(np.stack([np.pad(table['flux_err'], 
+            (0, n_max - len(table['flux_err'])), 'constant',
+            constant_values=(0.,)) for table in tables]))
+
+        # Masking array which is later used to mask out the padded values
+        masks_list = []
+        for table in tables:
+            array = np.append(
+                np.ones(len(table['HJD'])),  
+                np.zeros(n_max - len(table['HJD']))
+                )
+            masks_list.append(array)
+
+        self.mask = T._shared(np.stack(masks_list).astype('int8'))
+
+        # Define custom prior distributions 
+        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
+        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+        # Initialize non-linear parameters
+        ## Posterior is multi-modal in t0 and it's critical that the it is 
+        ## initialized near the true value
+        self.t0 = pm.Uniform('t0', T.min(self.t[0]), T.max(self.t[0]), 
+            testval=self.t0_guess(data))
+
+        self.u0 = BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
+        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
+        
+        # Deterministic transformations
+        self.tE = pm.Deterministic("tE", self.teff/self.u0) 
+
+        ## Noise model parameters
+        self.A = BoundedNormal1('A', 
+            mu=T.ones((self.n_bands, 1)),
+            sd=2.*T.ones((self.n_bands, 1)),
+            testval=1.5*T.ones((self.n_bands, 1)),
+            shape=(self.n_bands, 1))
+
+        self.B = BoundedNormal('B', 
+            mu=T.zeros((self.n_bands, 1)), 
+            sd=1*T.ones((self.n_bands, 1)),
+            testval=0.01*T.ones((self.n_bands, 1)),
+            shape=(self.n_bands, 1))
+
+        ## Save log prior for each parameter for hierarhical modeling 
+        self.logp_t0 = pm.Deterministic('logp_t0',
+            pm.Uniform.dist(T.min(self.t[0]), T.max(self.t[0])).logp(self.t0))
+        self.logp_u0 = pm.Deterministic('logp_u0', 
+            BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
+        self.logp_teff = pm.Deterministic('logp_teff', 
+            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
+        self.logp_A = pm.Deterministic('logp_A',
+            pm.Normal.dist(
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1)).logp(self.A))
+        self.logp_B = pm.Deterministic('logp_B',
+            pm.Normal.dist(
+                mu=T.zeros((self.n_bands, 1)), 
+                sd=5*T.ones((self.n_bands, 1)),
+                testval=0.01*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1)).logp(self.B))
+
+        # Compute the likelihood function
+        self.mag = self.magnification(self.t) 
+
+        # Diagonal terms of the covariance matrix
+        self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
+
+        pm.Potential('likelihood', self.log_likelihood())
+
+        # Define helpful class attributes
+        self.free_parameters = [RV.name for RV in self.basic_RVs]
+        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+
+    def magnification(self, t):
+        """
+        Calculates the PSPL magnification fraction [A(u) - 1]/[A(u0) - 1]
+        where A(u) is the analytic PSPL magnification.
+        
+        Parameters
+        ----------
+        t : theano.tensor   
+            Observation times, passed as 1D theano tensor.
+        
+        Returns
+        -------
+        theano.tensor
+            Magnification values for each time vector, shape (n_bands, n_data). 
+        """
+
+        u = T.sqrt(self.u0**2 + ((t - self.t0)/self.tE)**2)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return (A(u) - 1)/(A(self.u0) - 1) 
+
+    def log_likelihood(self):
+        """
+        Gaussian likelihood funciton marginalized over the linear parameters.
+        """
+        def ll_single_band(F, varF, mag, mask):
+    #        F = self.F[0]
+    #        varF = self.varF[0]
+    #        mag = self.mag[0]
+    #        mask = self.mask[0]
+            T.printing.Print('F shape')(T.shape(F))
+            T.printing.Print('ones like F shape')(T.shape(T.ones_like(F)))
+            T.printing.Print('varF shape')(T.shape(varF))
+            T.printing.Print('mag shape')(T.shape(mag))
+            T.printing.Print('mask')(T.shape(mask))
+            N = T.shape(F)[0]
+
+            # Linear parameter matrix
+    #        mu_theta = T.dot(mag_vector, np.max(self.F))
+            A = T.stack([mag, T.ones_like(F)], axis=1)
+
+            T.printing.Print('A shape')(T.shape(A))
+
+            # Covariance matrix
+            C_diag = varF
+            C = T.nlinalg.diag(C_diag)
+
+            # Prior matrix
+            sigDelta_F = 10.
+            sigF_base = 0.1
+            L_diag = T._shared(np.array([sigDelta_F, sigF_base])**2.)
+            L = T.nlinalg.diag(L_diag)
+
+            # Calculate inverse of covariance matrix for marginalized likelihood
+            inv_C = T.nlinalg.diag(T.pow(C_diag, -1.))
+            inv_L = T.nlinalg.diag(T.pow(L_diag, -1.))
+            term1 = T.dot(A.transpose(), inv_C) 
+            term2 = inv_L + T.dot(A.transpose(), T.dot(inv_C, A))
+            term3 = T.dot(inv_C, A)
+            inv_SIGMA = inv_C - T.dot(term3, T.dot(T.nlinalg.matrix_inverse(term2),
+                term1))
+
+            # Calculate determinant of covariance matrix for marginalized likelihood
+            det_C = C_diag.prod() 
+            det_L = L_diag.prod() 
+            det_SIGMA = det_C*det_L*T.nlinalg.det(term2)
+
+            # Calculate marginalized likelihood
+            r = F #- mu_theta
+            return -0.5*T.dot(r.transpose(), T.dot(inv_SIGMA, r)) -\
+                0.5*N*np.log(2*np.pi) - 0.5*np.log(det_SIGMA)
+
+        result, updates = theano.scan(fn=ll_single_band,
+                            outputs_info=None,
+                            sequences=[self.F, self.varF, self.mag, self.mask])
+
+        #T.printing.Print('log_likelihoods')(result)
+
+        ## Sum over all bands
+        return T.sum(result)
+
+    def t0_guess(self, event):
+        tmp = event.masks 
+        event.remove_worst_outliers(window_size=30, mad_cutoff=2)
+        tables = event.get_standardized_data()
+        fluxes = np.concatenate([table['flux'] for table in tables])
+        times = np.concatenate([table['HJD'] for table in tables])
+        event.masks = tmp
+        return np.median(times[fluxes > 4])

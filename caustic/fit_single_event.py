@@ -7,7 +7,7 @@ import exoplanet as xo
 
 from data import KMTData
 from models import PointSourcePointLensMatern32
-from models import PointSourcePointLensWhiteNoise3
+from models import PointSourcePointLens
 from models import OutlierRemovalModel
 from utils import plot_map_model_and_residuals
 
@@ -71,21 +71,21 @@ def fit_model(model, output_dir, n_tune=2000, n_sample=2000):
 
 random.seed(42)
 
-kmt_dir = '/home/fran/data/KMT/kmtnet/2017/2017/KB170009'
+kmt_dir = '/home/star/fb90/data/KMT/kmtnet/2017/2017/KB170053'
 event = KMTData(kmt_dir)
-event.event_name = 'KMTKB170009'
+event.event_name = 'KMTKB170053'
 
 # Remove worst outliers
 event.remove_worst_outliers()
-#event.tables = [event.tables[2]]
-#event.masks = [event.masks[2]]
+#event.tables = [event.tables[1]]
+#event.masks = [event.masks[1]]
 
 # Plot data
 fig, ax = plt.subplots(figsize=(25, 10))
 event.plot_standardized_data(ax)
 
-## Optimize the GP model to remove outliers
-#with OutlierRemovalModel(event) as model:
+# Optimize the GP model to remove outliers
+#with PointSourcePointLensWhiteNoise3(event) as model:
 #    start = model.test_point
 #    map_soln = xo.optimize(start=start, vars=[model.F_base])
 #    map_soln = xo.optimize(start=map_soln, vars=[model.Delta_F])
@@ -95,7 +95,7 @@ event.plot_standardized_data(ax)
 #    map_soln = xo.optimize(start=map_soln)
 #
 #print(map_soln)
-
+#
 #fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
 #    figsize=(25, 10), sharex=True)
 #fig.subplots_adjust(hspace=0.05)
@@ -105,7 +105,7 @@ event.plot_standardized_data(ax)
 
 # Define output directories
 output_dir4 = 'output/' + event.event_name +\
-        '/PointSourcePointLensMatern32'
+        '/PointSourcePointLens'
 
 # Create output directory
 if not os.path.exists(output_dir4):
@@ -119,4 +119,4 @@ if not os.path.exists(output_dir4):
 #fit_model(PointSourcePointLensWhiteNoise1(event), output_dir1)
 #    fit_model(PointSourcePointLensWhiteNoise2(event), output_dir2)
 #    fit_model(PointSourcePointLensWhiteNoise3(event), output_dir3)
-fit_model(PointSourcePointLensWhiteNoise3(event), output_dir4)
+fit_model(PointSourcePointLens(event, 'constant'), output_dir4, 1000, 2000)

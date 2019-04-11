@@ -257,7 +257,8 @@ class Data(object):
         for i, table in enumerate(tables):
             series = pd.Series(table['flux']) 
             mad = lambda x: 1.4826*np.median(np.abs(x - np.median(x)))
-            rolling_mad = np.array(series.rolling(window_size, center=True).apply(mad))
+            rolling_mad = np.array(series.rolling(window_size, 
+                center=True).apply(mad, raw=True))
             rolling_mad[-window_size//2:] = rolling_mad[-window_size//2]
             rolling_mad[:window_size//2] = rolling_mad[window_size//2]
             rolling_median = np.array(series.rolling(window_size, center=True).median())
@@ -269,6 +270,10 @@ class Data(object):
             
             # Update masks
             self.masks[i] = ~mask
+
+    def reset_masks(self):
+        for i in range(len(self.masks)):
+            self.masks[i] = np.ones(len(self.masks[i]), dtype=bool)
             
 class OGLEData(Data):
     """Subclass of data class for dealing with OGLE data."""
@@ -290,6 +295,7 @@ class OGLEData(Data):
         t.keep_columns(('HJD', 'mag', 'mag_err'))
         t.meta = {'band':'OGLE I', 'observatory':'OGLE'}
         self.tables.append(t)
+        self.masks = [np.ones(len(t['HJD']), dtype=bool)]
 
 class MOAData(Data):
     """Subclass of data class for dealing with OGLE data."""

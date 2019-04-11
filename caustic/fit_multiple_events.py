@@ -6,12 +6,11 @@ import seaborn as sns
 import os, random
 import sys
 import exoplanet as xo
+import theano
 
 from data import OGLEData
 from models import PointSourcePointLensMatern32
-from models import PointSourcePointLensWhiteNoise1
-from models import PointSourcePointLensWhiteNoise2
-from models import PointSourcePointLensWhiteNoise3
+from models import PointSourcePointLensMarginalized
 
 def save_summary_stats(trace, output_dir):
         df = pm.summary(trace)
@@ -39,10 +38,10 @@ def fit_model(model, output_dir, n_tune=2000, n_sample=2000):
 
     with model_instance:
         burnin = sampler.tune(tune=n_tune,
-            step_kwargs=dict(target_accept=0.9))
+            step_kwargs=dict(target_accept=0.9), njobs=1)
 
     with model_instance:
-        trace = sampler.sample(draws=n_sample)
+        trace = sampler.sample(draws=n_sample, njobs=1)
 
     # Save trace to file
     pm.save_trace(trace, output_dir + '/model.trace',
@@ -76,7 +75,7 @@ random.seed(42)
 
 events = []  # data for each event
 
-data_path = '/home/fran/data/OGLE_ews/2017/'
+data_path = '/home/star/fb90/data/OGLE_ews/2017/'
 dirs = []
 for directory in os.listdir(data_path):
     dirs.append(directory)
@@ -90,6 +89,9 @@ for directory in dirs:
         events.append(event)
         i = i + 1
 
+print(theano.__version__)
+print(np.__version__)
+
 for event in events:
     print("Fitting models for event ", event.event_name)
 
@@ -102,6 +104,8 @@ for event in events:
          '/PointSourcePointLensWN3'
     output_dir4 = 'output/' + event.event_name +\
          '/PointSourcePointLensMatern32'
+    output_dir5 = 'output/' + event.event_name +\
+         '/PointSourcePointLensMarginalized'
 
     # Create output directory
     if not os.path.exists(output_dir1):
@@ -112,6 +116,8 @@ for event in events:
         os.makedirs(output_dir3)
     if not os.path.exists(output_dir4):
         os.makedirs(output_dir4)
+    if not os.path.exists(output_dir5):
+        os.makedirs(output_dir5)
 
     # Plot data and save theplot
     fig, ax = plt.subplots(figsize=(25, 10))
@@ -120,5 +126,6 @@ for event in events:
 
 #    fit_model(PointSourcePointLensWhiteNoise1(event), output_dir1)
 #    fit_model(PointSourcePointLensWhiteNoise2(event), output_dir2)
-    fit_model(PointSourcePointLensWhiteNoise3(event), output_dir3)
+#    fit_model(PointSourcePointLensWhiteNoise3(event), output_dir3)
 #    fit_model(PointSourcePointLensMatern32(event), output_dir4)
+    fit_model(PointSourcePointLensMarginalized(event), output_dir5)
