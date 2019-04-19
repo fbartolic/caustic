@@ -2,13 +2,13 @@ import pymc3 as pm
 import numpy as np
 from matplotlib import pyplot as plt
 import matplotlib as mpl
-import seaborn as sns
 import os, random
 import sys
 import exoplanet as xo
 import theano
 
 from data import OGLEData
+from models import PointSourcePointLens
 from models import PointSourcePointLensMatern32
 from models import PointSourcePointLensMarginalized
 
@@ -25,7 +25,7 @@ def save_divergences_stats(trace, output_dir):
         divperc = divergent.nonzero()[0].size / len(trace) * 100
         print(f'Percentage of Divergent %.1f' % divperc, file=text_file)
 
-def fit_model(model, output_dir, n_tune=2000, n_sample=2000):
+def fit_model(model, output_dir, n_tune=2000, n_samples=2000):
 
     sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
 
@@ -38,10 +38,10 @@ def fit_model(model, output_dir, n_tune=2000, n_sample=2000):
 
     with model_instance:
         burnin = sampler.tune(tune=n_tune,
-            step_kwargs=dict(target_accept=0.9), njobs=1)
+            step_kwargs=dict(target_accept=0.9))
 
     with model_instance:
-        trace = sampler.sample(draws=n_sample, njobs=1)
+        trace = sampler.sample(draws=n_samples)
 
     # Save trace to file
     pm.save_trace(trace, output_dir + '/model.trace',
@@ -88,23 +88,14 @@ for directory in dirs:
         event = OGLEData(data_path + directory)
         events.append(event)
         i = i + 1
-
-print(theano.__version__)
-print(np.__version__)
-
+     
 for event in events:
     print("Fitting models for event ", event.event_name)
 
     # Define output directories
     output_dir1 = 'output/' + event.event_name +\
-         '/PointSourcePointLensWN1'
-    output_dir2 = 'output/' + event.event_name +\
-         '/PointSourcePointLensWN2'
-    output_dir3 = 'output/' + event.event_name +\
-         '/PointSourcePointLensWN3'
-    output_dir4 = 'output/' + event.event_name +\
          '/PointSourcePointLensMatern32'
-    output_dir5 = 'output/' + event.event_name +\
+    output_dir2 = 'output/' + event.event_name +\
          '/PointSourcePointLensMarginalized'
 
     # Create output directory
@@ -112,20 +103,19 @@ for event in events:
         os.makedirs(output_dir1)
     if not os.path.exists(output_dir2):
         os.makedirs(output_dir2)
-    if not os.path.exists(output_dir3):
-        os.makedirs(output_dir3)
-    if not os.path.exists(output_dir4):
-        os.makedirs(output_dir4)
-    if not os.path.exists(output_dir5):
-        os.makedirs(output_dir5)
 
     # Plot data and save theplot
     fig, ax = plt.subplots(figsize=(25, 10))
     event.plot(ax)
     plt.savefig('output/' + event.event_name + '/data.pdf')
 
-#    fit_model(PointSourcePointLensWhiteNoise1(event), output_dir1)
-#    fit_model(PointSourcePointLensWhiteNoise2(event), output_dir2)
-#    fit_model(PointSourcePointLensWhiteNoise3(event), output_dir3)
-#    fit_model(PointSourcePointLensMatern32(event), output_dir4)
-    fit_model(PointSourcePointLensMarginalized(event), output_dir5)
+#    with PointSourcePointLens(event) as model_instance:
+#        model_instance.profile(model_instance.logpt).summary()
+#    with PointSourcePointLensMarginalized(event) as model_instance:
+#        model_instance.profile(model_instance.logpt).summary()
+
+#    fit_model(PointSourcePointLensMatern32(event, 
+#        errorbar_rescaling='additive_variance'), output_dir1)
+
+    fit_model(PointSourcePointLensMarginalized(event, 
+        errorbar_rescaling='additive_variance'), output_dir2, n_samples=1000)

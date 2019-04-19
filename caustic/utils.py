@@ -4,7 +4,6 @@ import matplotlib as mpl
 import seaborn as sns
 import exoplanet as xo
 import pymc3 as pm
-import arviz as az
 
 from data import OGLEData
 
