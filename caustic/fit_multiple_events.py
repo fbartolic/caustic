@@ -94,7 +94,7 @@ for event in events:
 
     # Define output directories
     output_dir1 = 'output/' + event.event_name +\
-         '/PointSourcePointLensMatern32'
+         '/PointSourcePointLens'
     output_dir2 = 'output/' + event.event_name +\
          '/PointSourcePointLensMarginalized'
 
@@ -114,8 +114,8 @@ for event in events:
 #    with PointSourcePointLensMarginalized(event) as model_instance:
 #        model_instance.profile(model_instance.logpt).summary()
 
-#    fit_model(PointSourcePointLensMatern32(event, 
-#        errorbar_rescaling='additive_variance'), output_dir1)
+    fit_model(PointSourcePointLens(event, 
+        errorbar_rescaling='additive_variance'), output_dir1, n_samples=1000)
 
     fit_model(PointSourcePointLensMarginalized(event, 
         errorbar_rescaling='additive_variance'), output_dir2, n_samples=1000)

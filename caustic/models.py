@@ -14,7 +14,7 @@ class SingleLensModel(pm.Model):
     """
     Skeleton class for a single lens model. Classes which inherit from this class 
     should implement the `magnification`, `log_likelihood`, 
-    `evaluate_model_on_grid` and `evaluate_map_model_on_grid` methods.
+    `evaluate_posterior_model_on_grid` and `evaluate_map_model_on_grid` methods.
     """
     #  override __init__ function from pymc3 Model class
     def __init__(self, data, name='', model=None):
@@ -65,7 +65,7 @@ class SingleLensModel(pm.Model):
         """
         pass
 
-    def evaluate_model_on_grid(self, trace, t_grid, n_samples=50):
+    def evaluate_posterior_model_on_grid(self, trace, t_grid, n_samples=50):
         """
         Evaluates model on dense grid for N_pred random samples from the 
         posterior.
@@ -95,6 +95,12 @@ class SingleLensModel(pm.Model):
         event.masks = tmp
 
         return np.median(times[fluxes > 4])
+    
+    def generate_mock_data_from_prior(self, event):
+        """
+        Generates mock light curve by sampling the prior distribution. This
+        method should be overloaded by subclasses.
+        """
 
 class OutlierRemovalModel(SingleLensModel):
     #  override __init__ function from pymc3 Model class
@@ -264,7 +270,7 @@ class OutlierRemovalModel(SingleLensModel):
         
         return model_prediction
 
-    def evaluate_model_on_grid(self, trace, t_grid, n_samples=50):
+    def evaluate_posterior_model_on_grid(self, trace, t_grid, n_samples=50):
         """
         Evaluates GP model on dense grid for N_pred random samples from the 
         posterior.
@@ -314,12 +320,11 @@ class PointSourcePointLens(SingleLensModel):
         BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
 
         # Initialize linear parameters
-        self.Delta_F = pm.Lognormal('Delta_F', 
-            mu=10.*T.ones((self.n_bands, 1)),
-            sd=15.*T.ones((self.n_bands, 1)),
+        self.Delta_F = BoundedNormal('Delta_F', 
+            mu=T.zeros((self.n_bands, 1)),
+            sd=50.*T.ones((self.n_bands, 1)),
             testval=5.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
-        
 
         self.F_base = pm.Normal('F_base', 
             mu=T.zeros((self.n_bands, 1)), 
@@ -506,22 +511,49 @@ class PointSourcePointLens(SingleLensModel):
 
         return ll
         
-    def evaluate_model_on_grid(self, trace, t_grid, n_samples=50):
-        model_prediction = np.zeros((self.n_bands, n_samples, len(t_grid)))
-        t_grid = T._shared(t_grid)
+    def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
+        # List of tensors with shape (n_datapoints) which are the 
+        # times at which the model is to be evaluated in each band
+        t_grids_tensors = [t_grid for t_grid in t_grids]
+
+        # List of numpy arrays with shape(n_samples, n_datapoints) array with 
+        # model predictions
+        predictions = [np.zeros((n_samples, 
+            int(T.shape(t_grid).eval()))) for t_grid in t_grids]
 
         for n in range(self.n_bands):
-            # Evaluate model
+            # Evaluate model for each sample
             for i, sample in enumerate(xo.get_samples_from_trace(trace, 
                     size=n_samples)):
-
                 # Tensor which is to be evaluated in model context
-                pred = self.Delta_F[n]*self.magnification(t_grid) +\
+                pred = self.Delta_F[n]*self.magnification(t_grids[n]) +\
                         self.F_base[n]
+                
+                predictions[n][i] = xo.eval_in_model(pred, sample)
 
-                model_prediction[n, i] = xo.eval_in_model(pred, sample)
-            
-        return model_prediction
+        return predictions 
+
+    def evaluate_prior_model_on_grid(self, trace, t_grids, n_samples):
+        # List of tensors with shape (n_datapoints) which are the 
+        # times at which the model is to be evaluated in each band
+        t_grids_tensors = [t_grid for t_grid in t_grids]
+
+        # List of numpy arrays with shape(n_samples, n_datapoints) array with 
+        # model predictions
+        predictions = [np.zeros((n_samples, 
+            int(T.shape(t_grid).eval()))) for t_grid in t_grids]
+
+        for n in range(self.n_bands):
+            # Evaluate model for each sample
+            for i in range(n_samples):
+                # Tensor which is to be evaluated in model context
+                pred = self.Delta_F[n]*self.magnification(t_grids[n]) +\
+                        self.F_base[n]
+                sample = {key:trace[key][i] for key in trace.keys()}
+
+                predictions[n][i] = xo.eval_in_model(pred, sample)
+
+        return predictions 
 
     def evaluate_map_model_on_grid(self, t_grid, map_point):
         model_prediction = np.zeros((self.n_bands, len(t_grid)))
@@ -535,6 +567,9 @@ class PointSourcePointLens(SingleLensModel):
             model_prediction[n] = xo.eval_in_model(pred, map_point)
             
         return model_prediction
+
+    
+
 
 class PointSourcePointLensMatern32(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant'):
@@ -768,7 +803,7 @@ class PointSourcePointLensMatern32(SingleLensModel):
         # GP likelihood
         return gp.log_likelihood(r[mask.nonzero()])
         
-    def evaluate_model_on_grid(self, trace, t_grid, n_samples=50):
+    def evaluate_posterior_model_on_grid(self, trace, t_grid, n_samples=50):
         """
         Evaluates GP model on dense grid for N_pred random samples from the 
         posterior.

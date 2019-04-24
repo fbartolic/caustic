@@ -4,6 +4,8 @@ import matplotlib as mpl
 import seaborn as sns
 import exoplanet as xo
 import pymc3 as pm
+import theano.tensor as T
+import os
 
 from data import OGLEData
 
@@ -29,67 +31,20 @@ def qq_plot(ax, residuals):
     ax.set_xlabel("Modeled residuals")
     ax.set_ylabel("Measured residuals")
 
-
-#def plot_mock_data(ax, data, pm_model, trace):
-#    """Plots mock data evaluated at original observation times."""
-#    median_params_dict = {}
-#    for i in range(len(pm_model.vars)):
-#        median_params_dict[str(pm_model.vars[i])] = \
-#            np.percentile(trace[pm_model.vars[i]], [16, 50, 84], 
-#            axis=0)[1]
-#    
-#    df = data.get_standardized_data()
-#    t = df['HJD - 2450000'].values
-#
-#    with pm_model:
-#        # Evaluate residuals
-#        F_base = pm_model.F_base
-#        u0 = pm_model.u0
-#        t0 = pm_model.t0
-#        Delta_F = pm_model.Delta_F
-#        tE = pm_model.tE
-#        u = T.sqrt(u0**2 + ((t - t0)/tE)**2)
-#        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-#        mean_func = Delta_F*(A(u) - 1)/(A(u0) - 1) + F_base
-#
-#        mean_function = xo.eval_in_model(mean_func, 
-#            median_params_dict)
-#        
-#    F_err = df['I_flux_err'].values*np.median(trace['K'])
-#
-#    mock_data = np.random.multivariate_normal(mean=mean_function,
-#        cov=np.diag(F_err))
-#
-#    ax[0].errorbar(t, mock_data, F_err, fmt='.', color='black', label='Data', 
-#        ecolor='#686868')
-#    ax[0].grid(True)
-#    ax[0].set_title(data.event_name + 'mock')
-#    ax[0].set_xlabel(df.columns[0])
-#    ax[0].set_ylabel(df.columns[1])
-#
-#    # Plot residuals
-#    df = event.get_standardized_data()
-#    residuals = mock_data - mean_function
-#    ax[1].errorbar(t, residuals, F_err, 
-#        fmt='.', color='black', ecolor='#686868')
-#    ax[1].grid(True)
-
 def plot_model_and_residuals(ax, event, pm_model, trace_path):
     # Load standardized data
     tables = event.get_standardized_data()
-#    t_grid = np.linspace(tables[0]['HJD'][0], 
-#            tables[0]['HJD'][-1], 2000)
-    t_grid = np.linspace(7950,
-            8050, 500)
-
+    t_grids = [T._shared(np.linspace(table['HJD'][0], table['HJD'][-1], 2000))\
+        for table in tables]
+    t_observed = [T._shared(table['HJD']) for table in tables]
 
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
         trace = pm.load_trace(trace_path) 
-        pred = model_instance.evaluate_model_on_grid(trace, t_grid, 
+        pred = model_instance.evaluate_model_on_grid(trace, t_grids, 
             n_samples=50)
-        pred_at_observed_times = [model_instance.evaluate_model_on_grid(trace,
-            table['HJD'], n_samples=100) for table in tables]
+        pred_at_observed_times = model_instance.evaluate_model_on_grid(trace,
+            t_observed, n_samples=100) 
 
     # Plot data
     event.plot_standardized_data(ax[0])
@@ -146,6 +101,59 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point):
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
             fmt='.', color='C' + str(n))
         ax[1].grid(True)
+
+def plot_prior_model_samples(ax, event, pm_model, n_samples):
+    # Load standardized data
+    tables = event.get_standardized_data()
+    t_grids = [T._shared(np.linspace(table['HJD'][0], table['HJD'][-1], 2000))\
+        for table in tables]
+
+    # Sample from the prior
+    with pm_model as model_instance:
+        trace = pm.sample_prior_predictive(n_samples)
+        predictions = model_instance.evaluate_prior_model_on_grid(trace, t_grids,
+             n_samples)
+
+    # Plot data
+    event.plot_standardized_data(ax)
+    ax.set_xlabel('HJD - 2450000')
+
+    # Plot predictions for various samples
+    for i in range(n_samples):
+        for n in range(model_instance.n_bands): # iterate over bands
+            ax.plot(t_grids[n].eval(), predictions[n][i, :], color='C' + str(n), 
+                alpha=0.5)
+
+def plot_histograms_of_prior_samples(event, pm_model, output_dir):
+    # Load standardized data
+    tables = event.get_standardized_data()
+
+    # Sample from the prior
+    n_samples = 5000
+    with pm_model as model_instance:
+        trace = pm.sample_prior_predictive(n_samples)
+
+    directory = output_dir + '/prior_samples/'
+    # Create output directory
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    for key in trace.keys():
+        value = trace[key]
+        # Some parameters are multivariate and in those cases the keys have 
+        # different dimensions
+        if value.ndim > 1:
+            for i in range(value.ndim):
+                fig, ax = plt.subplots() 
+                label = key + str(i)
+                ax.hist(value[:, i], bins=30);
+                ax.set_xlabel(label)
+                plt.savefig(directory + label + '.png')
+        else:
+            fig, ax = plt.subplots() 
+            label = key
+            ax.hist(value, bins=30);
+            plt.savefig(directory + label + '.png')
 
 def plot_violin_plots(ax, pm_models, trace_paths, parameter_names):
     for idx, model in enumerate(pm_models):

@@ -6,8 +6,9 @@ import sys
 import exoplanet as xo
 
 from data import KMTData
-from models import PointSourcePointLensMatern32
 from models import PointSourcePointLens
+from models import PointSourcePointLensMatern32
+from models import PointSourcePointLensMarginalized
 from models import OutlierRemovalModel
 from utils import plot_map_model_and_residuals
 
@@ -33,7 +34,7 @@ def fit_model(model, output_dir, n_tune=2000, n_sample=2000):
         print("Free parameters: ", model.free_parameters)
         print("Initial values of logp for each parameter: ", 
             model.initial_logps)
-
+        
     with model_instance:
         burnin = sampler.tune(tune=n_tune,
             step_kwargs=dict(target_accept=0.9))
@@ -119,4 +120,10 @@ if not os.path.exists(output_dir4):
 #fit_model(PointSourcePointLensWhiteNoise1(event), output_dir1)
 #    fit_model(PointSourcePointLensWhiteNoise2(event), output_dir2)
 #    fit_model(PointSourcePointLensWhiteNoise3(event), output_dir3)
-fit_model(PointSourcePointLens(event, 'constant'), output_dir4, 1000, 2000)
+
+# Profile model
+#with PointSourcePointLensMarginalized(event) as model_instance:
+#    model_instance.profile(model_instance.logpt).summary()
+
+
+fit_model(PointSourcePointLens(event), output_dir4, 1000, 1000)
