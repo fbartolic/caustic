@@ -1,7 +1,6 @@
 import numpy as np
 from matplotlib import pyplot as plt
 import matplotlib as mpl
-import seaborn as sns
 import exoplanet as xo
 import pymc3 as pm
 import theano.tensor as T
@@ -31,7 +30,28 @@ def qq_plot(ax, residuals):
     ax.set_xlabel("Modeled residuals")
     ax.set_ylabel("Measured residuals")
 
-def plot_model_and_residuals(ax, event, pm_model, trace_path):
+def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
+    """
+    Plots model in data space given samples from the posterior 
+    distribution. Also plots residuals with respect to the median model, where 
+    the median model is the median of multiple posterior draws of the model 
+    in data space, rather then a single draw corresponding to median values of
+    all parameters.
+    
+    Parameters
+    ----------
+    ax : matplotlib.axes 
+        Needs to be of shape (2, 1).
+    event : caustic.data 
+        Microlensing event data. 
+    pm_model : pymc3.Model
+        PyMC3 model object which was used to obtain posterior samples in the
+        trace.
+    trace_path : str
+        Path to PyMC3 trace object saved as 'model.trace'.
+    n_samples: int
+        Number of posterior draws to be plotted.
+    """
     # Load standardized data
     tables = event.get_standardized_data()
     t_grids = [T._shared(np.linspace(table['HJD'][0], table['HJD'][-1], 2000))\
@@ -71,6 +91,22 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path):
         ax[1].grid(True)
 
 def plot_map_model_and_residuals(ax, event, pm_model, map_point):
+    """
+    Plots model in data space given MAP parameters of the model. Also plots 
+    residuals with respect to MAP model.
+    
+    Parameters
+    ----------
+    ax : matplotlib.axes 
+        Needs to be of shape (2, 1).
+    event : caustic.data 
+        Microlensing event data. 
+    pm_model : pymc3.Model
+        PyMC3 model object which was used to obtain posterior samples in the
+        trace.
+    map_point : dict 
+        Dictionary containing the MAP values of model parameters.
+    """
     # Load standardized data
     tables = event.get_standardized_data()
     t_grid = np.linspace(tables[0]['HJD'][0], 
@@ -103,6 +139,24 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point):
         ax[1].grid(True)
 
 def plot_prior_model_samples(ax, event, pm_model, n_samples):
+    """
+    Plots model in data space given samples drawn from the prior probability
+    distribution. This is useful debugging prior choices.
+    
+    Parameters
+    ----------
+    ax : matplotlib.axes
+        Single matplotlib axes object.
+    event : caustic.data
+        Microlensing event data. Although this functions plots draws from the
+        prior, some of the priors depend on the data in a simple way so a
+        data object is still needed.
+    pm_model : pymc3.Model
+        PyMC3 model object. Needs to work with `sample_prior_predictive` method
+        from PyMC3.
+    n_samples : int
+        Number of samples from prior.
+    """
     # Load standardized data
     tables = event.get_standardized_data()
     t_grids = [T._shared(np.linspace(table['HJD'][0], table['HJD'][-1], 2000))\
@@ -125,9 +179,22 @@ def plot_prior_model_samples(ax, event, pm_model, n_samples):
                 alpha=0.5)
 
 def plot_histograms_of_prior_samples(event, pm_model, output_dir):
-    # Load standardized data
-    tables = event.get_standardized_data()
-
+    """
+    Plots histograms of draws from prior distribution for each model parameter.
+    The plots are saved to disk.
+    
+    Parameters
+    ----------
+    event : caustic.data
+        Microlensing event data. Although this functions plots draws from the
+        prior, some of the priors depend on the data in a simple way so a
+        data object is still needed.
+    pm_model : pymc3.Model
+        PyMC3 model object. Needs to work with `sample_prior_predictive` method
+        from PyMC3.
+    output_dir : str 
+        Path to output directory where the images are going to be saved.
+    """
     # Sample from the prior
     n_samples = 5000
     with pm_model as model_instance:

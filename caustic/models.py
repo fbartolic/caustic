@@ -65,22 +65,7 @@ class SingleLensModel(pm.Model):
         """
         pass
 
-    def evaluate_posterior_model_on_grid(self, trace, t_grid, n_samples=50):
-        """
-        Evaluates model on dense grid for N_pred random samples from the 
-        posterior.
-        
-        """
-        pass
-
-    def evaluate_map_model_on_grid(self, t_grid, map_point):
-        """
-        Evaluates model on dense grid for N_pred random samples from the 
-        posterior.
-        
-        """
-        pass
-    
+   
     def t0_guess(self, event):
         """
         Guesses an intial value for the t0 parameter. This is necessary because
@@ -96,11 +81,59 @@ class SingleLensModel(pm.Model):
 
         return np.median(times[fluxes > 4])
     
-    def generate_mock_data_from_prior(self, event):
+    def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
         """
-        Generates mock light curve by sampling the prior distribution. This
-        method should be overloaded by subclasses.
+        Evaluates a posterior model on a dense grid given samples from a 
+        posterior distribution over the model parameters.
+        
+        Parameters
+        ----------
+        trace : PyMC3 MultiTrace object
+            Trace object containing samples from posterior.
+        t_grids : list of 1D Theano tensors
+            Time grids on which the model is to be evaluated. The list should
+            contain one tensor for each observing band.
+        n_samples : int, optional
+            Number of parameter samples for which the model is to be evaluated,
+            these are randomly picked from the trace object, by default 50.
         """
+        pass
+
+    def evaluate_prior_model_on_grid(self, trace, t_grids, n_samples=50):
+        """
+        Evaluates a posterior model on a dense grid given samples from a 
+        posterior distribution over the model parameters.
+        
+        Parameters
+        ----------
+        trace : dict
+            Dictionary with variable names as keys. The values are numpy 
+            arrays (of varying shapes depending on the parameter) containing 
+            prior samples. 
+        t_grids : list of 1D Theano tensors
+            Time grids on which the model is to be evaluated. The list should
+            contain one tensor for each observing band.
+        n_samples : int, optional
+            Number of parameter samples for which the model is to be evaluated,
+            these are randomly picked from the trace object, by default 50.
+        """
+        pass
+
+    def evaluate_map_model_on_grid(self, t_grids, map_point):
+        """
+        Evaluates a MAP model on a dense grid given the MAP parameters of
+        the model.
+        
+        Parameters
+        ----------
+        t_grids : list of 1D Theano tensors
+            Time grids on which the model is to be evaluated. The list should
+            contain one tensor for each observing band.
+        map_point : dict
+            A dictionary contatining values of MAP parameters.
+            
+        """
+        pass
 
 class OutlierRemovalModel(SingleLensModel):
     #  override __init__ function from pymc3 Model class
@@ -514,7 +547,7 @@ class PointSourcePointLens(SingleLensModel):
     def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
         # List of tensors with shape (n_datapoints) which are the 
         # times at which the model is to be evaluated in each band
-        t_grids_tensors = [t_grid for t_grid in t_grids]
+        t_grids = [t_grid for t_grid in t_grids]
 
         # List of numpy arrays with shape(n_samples, n_datapoints) array with 
         # model predictions
@@ -533,10 +566,10 @@ class PointSourcePointLens(SingleLensModel):
 
         return predictions 
 
-    def evaluate_prior_model_on_grid(self, trace, t_grids, n_samples):
+    def evaluate_prior_model_on_grid(self, trace, t_grids, n_samples=50):
         # List of tensors with shape (n_datapoints) which are the 
         # times at which the model is to be evaluated in each band
-        t_grids_tensors = [t_grid for t_grid in t_grids]
+        t_grids = [t_grid for t_grid in t_grids]
 
         # List of numpy arrays with shape(n_samples, n_datapoints) array with 
         # model predictions
@@ -567,8 +600,6 @@ class PointSourcePointLens(SingleLensModel):
             model_prediction[n] = xo.eval_in_model(pred, map_point)
             
         return model_prediction
-
-    
 
 
 class PointSourcePointLensMatern32(SingleLensModel):

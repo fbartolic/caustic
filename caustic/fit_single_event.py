@@ -78,8 +78,6 @@ event.event_name = 'KMTKB170053'
 
 # Remove worst outliers
 event.remove_worst_outliers()
-#event.tables = [event.tables[1]]
-#event.masks = [event.masks[1]]
 
 # Plot data
 fig, ax = plt.subplots(figsize=(25, 10))
@@ -126,4 +124,4 @@ if not os.path.exists(output_dir4):
 #    model_instance.profile(model_instance.logpt).summary()
 
 
-fit_model(PointSourcePointLens(event), output_dir4, 1000, 1000)
+fit_model(PointSourcePointLens(event), output_dir4, 500, 1000)
