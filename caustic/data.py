@@ -29,7 +29,6 @@ class Data(object):
         observations of the same event, one can load each dataset seperately 
         and simply add them together.
         """
-
         result = Data()
         if (self.units != other.units):
             raise ValueError('Make sure that all datasets have the same units\
@@ -46,7 +45,8 @@ class Data(object):
     def load_data(self, event_dir):
         """
         Loads raw time series data for each survey into Astropy tables,
-        stores it in `tables` class atrribute."""
+        stores it in `tables` class atrribute.
+        """
 
     def convert_data_to_fluxes(self):
         """

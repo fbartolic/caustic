@@ -96,6 +96,13 @@ class SingleLensModel(pm.Model):
         n_samples : int, optional
             Number of parameter samples for which the model is to be evaluated,
             these are randomly picked from the trace object, by default 50.
+
+        Returns
+        -------
+        list
+            List of numpy arrays of shape (n_sample, len(t_grid)) for
+            each t_grid in t_grids. Each element of the list corresponds to 
+            a model prediction in a different band.
         """
         pass
 
@@ -116,6 +123,13 @@ class SingleLensModel(pm.Model):
         n_samples : int, optional
             Number of parameter samples for which the model is to be evaluated,
             these are randomly picked from the trace object, by default 50.
+        
+        Returns
+        -------
+        list
+            List of numpy arrays of shape (n_sample, len(t_grid)) for
+            each t_grid in t_grids. Each element of the list corresponds to 
+            a model prediction in a different band.
         """
         pass
 
@@ -131,29 +145,35 @@ class SingleLensModel(pm.Model):
             contain one tensor for each observing band.
         map_point : dict
             A dictionary contatining values of MAP parameters.
-            
+
+        Returns
+        -------
+        list
+            List of numpy arrays of shape (len(t_grid)) for
+            each t_grid in t_grids. Each element of the list corresponds to 
+            a model MAP prediction in a different band.
         """
         pass
 
 class OutlierRemovalModel(SingleLensModel):
     #  override __init__ function from pymc3 Model class
-    def __init__(self, data, name='', model=None):
-        super(OutlierRemovalModel, self).__init__()
+    def __init__(self, data):
+        super(OutlierRemovalModel, self).__init__(data)
 
         # Define custom prior distributions 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
         BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
 
         # Initialize linear parameters
-        self.Delta_F = pm.Lognormal('Delta_F', 
-            mu=10.*T.ones((self.n_bands, 1)),
-            sd=2.*T.ones((self.n_bands, 1)),
-            testval=10.*T.ones((self.n_bands, 1)),
+        self.Delta_F = BoundedNormal('Delta_F', 
+            mu=T.zeros((self.n_bands, 1)),
+            sd=T.max(self.F)*T.ones((self.n_bands, 1)),
+            testval=T.max(self.F)*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
         self.F_base = pm.Normal('F_base', 
             mu=T.zeros((self.n_bands, 1)), 
-            sd=0.05*T.ones((self.n_bands, 1)),
+            sd=3.*T.ones((self.n_bands, 1)),
             testval=T.zeros((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
@@ -212,7 +232,7 @@ class OutlierRemovalModel(SingleLensModel):
         self.r = self.F - mean_func
 
         # Diagonal terms of the covariance matrix
-        self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
+        self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
 
         # Compute the log-likelihood which is additive across different bands
         ll = 0 
@@ -264,85 +284,37 @@ class OutlierRemovalModel(SingleLensModel):
         # GP likelihood
         return gp.log_likelihood(r[mask.nonzero()])
    
-    def evaluate_map_model_on_grid(self, t_grid, map_point):
-        """
-        Evaluates GP model on dense grid for N_pred random samples from the 
-        posterior.
-        
-        """
-        model_prediction = np.zeros((self.n_bands, len(t_grid)))
-        t_grid = T._shared(t_grid)
+    def evaluate_map_model_on_grid(self, t_grids, map_point):
+        predictions = [np.zeros(T.shape(t_grid).eval()) for t_grid in t_grids]
 
         for n in range(self.n_bands):
             # Evaluate mean function at observed times
-            mag_obs = self.magnification(self.t[n])
+            mag_obs = self.magnification(self.t[n][self.mask[n].nonzero()])
             mean_func_obs = self.Delta_F[n]*mag_obs + self.F_base[n]
 
             # Evaluate mean function on fine grid
-            mag = self.magnification(t_grid) 
+            mag = self.magnification(t_grids[n]) 
             mean_func = self.Delta_F[n]*mag + self.F_base[n]
             
             # Diagonal terms of the covariance matrix
-            varF = T.pow(self.A[n]*self.sigF[n], 2) +\
-                    T.pow(mag_obs*self.B[n], 2)
+            varF = T.pow(self.A[n]*self.sigF[n][self.mask[n].nonzero()], 2) +\
+                    T.pow(self.B[n], 2)
 
             # Initialize kernel and gp object
-
             kernel = terms.Matern32Term(sigma=self.sigma[n], 
                 rho=self.rho[n])
-            gp = GP(kernel, self.t[n], varF, J=2)
+            gp = GP(kernel, self.t[n][self.mask[n].nonzero()], varF, J=2)
 
             # Calculate log_likelihood 
-            r = self.F[n] - mean_func_obs
+            r = self.F[n][self.mask[n].nonzero()] - mean_func_obs
             gp.log_likelihood(r)
 
             # Evaluate tensors in model context
-            model_prediction[n] =\
-                xo.eval_in_model(gp.predict(t_grid), map_point) +\
+            predictions[n] =\
+                xo.eval_in_model(gp.predict(t_grids[n]), map_point) +\
                 xo.eval_in_model(mean_func, map_point) 
         
-        return model_prediction
-
-    def evaluate_posterior_model_on_grid(self, trace, t_grid, n_samples=50):
-        """
-        Evaluates GP model on dense grid for N_pred random samples from the 
-        posterior.
-        
-        """
-        model_prediction = np.zeros((self.n_bands, n_samples, len(t_grid)))
-        t_grid = T._shared(t_grid)
-
-        for n in range(self.n_bands):
-            # Evaluate model for each sample in the chain
-            for i, sample in enumerate(xo.get_samples_from_trace(trace, 
-                    size=n_samples)):
-                # Evaluate mean function at observed times
-                mag_obs = self.magnification(self.t[n])
-                mean_func_obs = self.Delta_F[n]*mag_obs + self.F_base[n]
-
-                # Evaluate mean function on fine grid
-                mag = self.magnification(t_grid) 
-                mean_func = self.Delta_F[n]*mag + self.F_base[n]
-                
-                # Diagonal terms of the covariance matrix
-                varF = T.pow(self.A[n]*self.sigF[n], 2) +\
-                     T.pow(mag_obs*self.B[n], 2)
-
-                # Initialize kernel and gp object
-                kernel = terms.Matern32Term(sigma=self.sigma[n], 
-                    rho=self.rho[n])
-                gp = GP(kernel, self.t[n], varF, J=2)
-
-                # Calculate log_likelihood 
-                r = self.F[n] - mean_func_obs
-                gp.log_likelihood(r)
-
-                # Evaluate tensors in model context
-                model_prediction[n, i] =\
-                    xo.eval_in_model(gp.predict(t_grid), sample) +\
-                    xo.eval_in_model(mean_func, sample) 
-            
-        return model_prediction
+        return predictions 
 
 class PointSourcePointLens(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant'):
@@ -545,10 +517,6 @@ class PointSourcePointLens(SingleLensModel):
         return ll
         
     def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
-        # List of tensors with shape (n_datapoints) which are the 
-        # times at which the model is to be evaluated in each band
-        t_grids = [t_grid for t_grid in t_grids]
-
         # List of numpy arrays with shape(n_samples, n_datapoints) array with 
         # model predictions
         predictions = [np.zeros((n_samples, 
@@ -567,10 +535,6 @@ class PointSourcePointLens(SingleLensModel):
         return predictions 
 
     def evaluate_prior_model_on_grid(self, trace, t_grids, n_samples=50):
-        # List of tensors with shape (n_datapoints) which are the 
-        # times at which the model is to be evaluated in each band
-        t_grids = [t_grid for t_grid in t_grids]
-
         # List of numpy arrays with shape(n_samples, n_datapoints) array with 
         # model predictions
         predictions = [np.zeros((n_samples, 
@@ -588,19 +552,19 @@ class PointSourcePointLens(SingleLensModel):
 
         return predictions 
 
-    def evaluate_map_model_on_grid(self, t_grid, map_point):
-        model_prediction = np.zeros((self.n_bands, len(t_grid)))
-        t_grid = T._shared(t_grid)
+    def evaluate_map_model_on_grid(self, t_grids, map_point):
+        # List of numpy arrays with shape(n_samples, n_datapoints) array with 
+        # model predictions
+        predictions = [np.zeros(nt(T.shape(t_grid).eval())) for t_grid in t_grids]
 
         for n in range(self.n_bands):
             # Tensor which is to be evaluated in model context
-            pred = self.Delta_F[n]*self.magnification(t_grid) +\
+            pred = self.Delta_F[n]*self.magnification(t_grids[n]) +\
                     self.F_base[n]
 
-            model_prediction[n] = xo.eval_in_model(pred, map_point)
+            predictions[n] = xo.eval_in_model(pred, map_point)
             
-        return model_prediction
-
+        return predictions 
 
 class PointSourcePointLensMatern32(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant'):
@@ -611,9 +575,9 @@ class PointSourcePointLensMatern32(SingleLensModel):
         BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
 
         # Initialize linear parameters
-        self.Delta_F = pm.Lognormal('Delta_F', 
-            mu=10.*T.ones((self.n_bands, 1)),
-            sd=15.*T.ones((self.n_bands, 1)),
+        self.Delta_F = BoundedNormal('Delta_F', 
+            mu=T.zeros((self.n_bands, 1)),
+            sd=50.*T.ones((self.n_bands, 1)),
             testval=5.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
@@ -834,85 +798,74 @@ class PointSourcePointLensMatern32(SingleLensModel):
         # GP likelihood
         return gp.log_likelihood(r[mask.nonzero()])
         
-    def evaluate_posterior_model_on_grid(self, trace, t_grid, n_samples=50):
-        """
-        Evaluates GP model on dense grid for N_pred random samples from the 
-        posterior.
-        
-        """
-        model_prediction = np.zeros((self.n_bands, n_samples, len(t_grid)))
-        t_grid = T._shared(t_grid)
+    def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
+        predictions = [np.zeros((n_samples, 
+            int(T.shape(t_grid).eval()))) for t_grid in t_grids]
 
         for n in range(self.n_bands):
             # Evaluate model for each sample in the chain
             for i, sample in enumerate(xo.get_samples_from_trace(trace, 
                     size=n_samples)):
                 # Evaluate mean function at observed times
-                mag_obs = self.magnification(self.t[n])
+                mag_obs = self.magnification(self.t[n][self.mask[n].nonzero()])
                 mean_func_obs = self.Delta_F[n]*mag_obs + self.F_base[n]
 
                 # Evaluate mean function on fine grid
-                mag = self.magnification(t_grid) 
+                mag = self.magnification(t_grids[n]) 
                 mean_func = self.Delta_F[n]*mag + self.F_base[n]
                 
                 # Diagonal terms of the covariance matrix
-                varF = T.pow(self.A[n]*self.sigF[n], 2) +\
-                     T.pow(mag_obs*self.B[n], 2)
+                varF = T.pow(self.A[n]*self.sigF[n][self.mask[n].nonzero()], 2) 
+#                     T.pow(mag_obs*self.B[n], 2)
 
                 # Initialize kernel and gp object
                 kernel = terms.Matern32Term(sigma=self.sigma[n], 
                     rho=self.rho[n])
-                gp = GP(kernel, self.t[n], varF, J=2)
+                gp = GP(kernel, self.t[n][self.mask[n].nonzero()], varF, J=2)
 
                 # Calculate log_likelihood 
-                r = self.F[n] - mean_func_obs
+                r = self.F[n][self.mask[n].nonzero()] - mean_func_obs
                 gp.log_likelihood(r)
 
                 # Evaluate tensors in model context
-                model_prediction[n, i] =\
-                    xo.eval_in_model(gp.predict(t_grid), sample) +\
+                predictions[n][i] =\
+                    xo.eval_in_model(gp.predict(t_grids[n]), sample) +\
                     xo.eval_in_model(mean_func, sample) 
             
-        return model_prediction
+        return predictions 
 
-    def evaluate_map_model_on_grid(self, t_grid, map_point):
-        """
-        Evaluates GP model on dense grid for N_pred random samples from the 
-        posterior.
-        
-        """
-        model_prediction = np.zeros((self.n_bands, len(t_grid)))
-        t_grid = T._shared(t_grid)
+    def evaluate_map_model_on_grid(self, t_grids, map_point):
+        predictions = [np.zeros(int(T.shape(t_grid).eval())) for t_grid in t_grids]
 
         for n in range(self.n_bands):
             # Evaluate mean function at observed times
-            mag_obs = self.magnification(self.t[n])
+            mag_obs = self.magnification(self.t[n][self.mask[n].nonzero()])
             mean_func_obs = self.Delta_F[n]*mag_obs + self.F_base[n]
 
             # Evaluate mean function on fine grid
-            mag = self.magnification(t_grid) 
+            mag = self.magnification(t_grids[n]) 
             mean_func = self.Delta_F[n]*mag + self.F_base[n]
             
             # Diagonal terms of the covariance matrix
-            varF = T.pow(self.A[n]*self.sigF[n], 2) +\
+            varF = T.pow(self.A[n]*self.sigF[n][self.mask[n].nonzero()], 2) +\
                     T.pow(mag_obs*self.B[n], 2)
 
             # Initialize kernel and gp object
 
             kernel = terms.Matern32Term(sigma=self.sigma[n], 
                 rho=self.rho[n])
-            gp = GP(kernel, self.t[n], varF, J=2)
+            gp = GP(kernel, self.t[n][self.mask[n].nonzero()], varF, J=2)
 
             # Calculate log_likelihood 
-            r = self.F[n] - mean_func_obs
+            r = self.F[n][self.mask[n].nonzero()] - mean_func_obs
             gp.log_likelihood(r)
 
             # Evaluate tensors in model context
-            model_prediction[n] =\
-                xo.eval_in_model(gp.predict(t_grid), map_point) +\
+            predictions[n] =\
+                xo.eval_in_model(gp.predict(t_grids[n]), map_point) +\
                 xo.eval_in_model(mean_func, map_point) 
         
-        return model_prediction
+        return predictions 
 
 class PointSourcePointLensMarginalized(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant'):

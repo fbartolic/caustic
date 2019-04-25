@@ -61,10 +61,10 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
         trace = pm.load_trace(trace_path) 
-        pred = model_instance.evaluate_model_on_grid(trace, t_grids, 
-            n_samples=50)
-        pred_at_observed_times = model_instance.evaluate_model_on_grid(trace,
-            t_observed, n_samples=100) 
+        pred = model_instance.evaluate_posterior_model_on_grid(trace, t_grids, 
+            n_samples)
+        pred_at_observed_times = model_instance.evaluate_posterior_model_on_grid(trace,
+            t_observed, n_samples=100) # more samples needed for accurate median
 
     # Plot data
     event.plot_standardized_data(ax[0])
@@ -72,20 +72,17 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
     ax[1].set_xlabel('HJD - 2450000')
     ax[1].set_ylabel('Residuals')
 
-    n_bands = len(tables)
-
     # Plot predictions for various samples
-    for n in range(n_bands): # iterate over bands
-        for i in range(len(pred[n, :, 0])):
-            ax[0].plot(t_grid, pred[n, i, :], color='C' + str(n), 
+    for n in range(model_instance.n_bands): # iterate over bands
+        for i in range(n_samples):
+            ax[0].plot(t_grids[n].eval(), pred[n][i, :], color='C' + str(n), 
                 alpha=0.2)
-
     # Calculate and plot residuals
-    for n in range(n_bands): # iterate over bands
+    for n in range(model_instance.n_bands): # iterate over bands
         quantile_predictions = np.percentile(pred_at_observed_times[n],
-            [16, 50, 84], axis=1)
+            [16, 50, 84], axis=0)
 
-        residuals =  tables[n]['flux'] - quantile_predictions[1, n, :]
+        residuals =  tables[n]['flux'] - quantile_predictions[1]
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
             fmt='.', color='C' + str(n))
         ax[1].grid(True)
@@ -109,14 +106,15 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point):
     """
     # Load standardized data
     tables = event.get_standardized_data()
-    t_grid = np.linspace(tables[0]['HJD'][0], 
-            tables[0]['HJD'][-1], 2000)
+    t_grids = [T._shared(np.linspace(table['HJD'][0], table['HJD'][-1], 5000))\
+        for table in tables]
+    t_observed = [T._shared(table['HJD']) for table in tables]
 
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
-        pred = model_instance.evaluate_map_model_on_grid(t_grid, map_point)
-        pred_at_observed_times = [model_instance.evaluate_map_model_on_grid(
-            table['HJD'], map_point) for table in tables]
+        pred = model_instance.evaluate_map_model_on_grid(t_grids, map_point)
+        pred_at_observed_times = model_instance.evaluate_map_model_on_grid(
+            t_observed, map_point)
 
     # Plot data
     event.plot_standardized_data(ax[0])
@@ -124,16 +122,13 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point):
     ax[1].set_xlabel('HJD - 2450000')
     ax[1].set_ylabel('Residuals')
 
-    n_bands = len(tables)
-
     # Plot predictions for various samples
-    for n in range(n_bands): # iterate over bands
-        ax[0].plot(t_grid, pred[n, :], color='C' + str(n), alpha=0.5)
-        print(pred[n, :])
+    for n in range(model_instance.n_bands): # iterate over bands
+        ax[0].plot(t_grids[n].eval(), pred[n], color='C' + str(n), alpha=0.5)
 
     # Calculate and plot residuals
-    for n in range(n_bands): # iterate over bands
-        residuals =  tables[n]['flux'] - pred_at_observed_times[n][n]
+    for n in range(model_instance.n_bands): # iterate over bands
+        residuals =  np.array(tables[n]['flux']) - pred_at_observed_times[n]
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
             fmt='.', color='C' + str(n))
         ax[1].grid(True)

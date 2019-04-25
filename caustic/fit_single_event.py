@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 import os, random
 import sys
 import exoplanet as xo
+import theano.tensor as T
 
 from data import KMTData
 from models import PointSourcePointLens
@@ -54,43 +55,59 @@ def fit_model(model, output_dir, n_tune=2000, n_sample=2000):
     # Save stats about divergent samples 
     save_divergences_stats(trace, output_dir)
 
-    # Save traceplots
-    _ = pm.traceplot(trace)
-    plt.savefig(output_dir + '/traceplots.png')
+def remove_outliers(model, event):
+    event.remove_worst_outliers()
+    with model as model_instance:
+        start = model.test_point
+        map_soln = xo.optimize(start=start, vars=[model.F_base])
+        map_soln = xo.optimize(start=map_soln, vars=[model.Delta_F])
+        map_soln = xo.optimize(start=map_soln, vars=[model.u0])
+        map_soln = xo.optimize(start=map_soln, vars=[model.t0])
+        map_soln = xo.optimize(start=map_soln, vars=[model.u0, model.teff])
+        map_soln = xo.optimize(start=map_soln)
 
-    # Save autocorrelation plots for the chains
-    pm.plots.autocorrplot(trace)
-    plt.savefig(output_dir + '/autocorr.png')
+        t_observed = [T._shared(table['HJD']) for table in event.tables]
+        pred_at_observed_times = model.evaluate_map_model_on_grid(
+            t_observed, map_soln)
 
-    # Save corner plot of the samples
-    rvs = [rv.name for rv in model_instance.basic_RVs]
-    pm.pairplot(trace,
-                divergences=True, plot_transformed=True, text_size=25,
-                varnames=rvs,
-                color='C3', figsize=(40, 40), kwargs_divergence={'color': 'C0'})
-    plt.savefig(output_dir + '/pairplot.png')
+    fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+        figsize=(25, 10), sharex=True)
+    fig.subplots_adjust(hspace=0.05)
+    
+    plot_map_model_and_residuals(ax, event, model, map_soln)
+
+    for n in range(model.n_bands):
+        resid = event.tables[n]['flux'] - pred_at_observed_times[n]
+        rms = np.sqrt(np.median(resid**2))
+
+        # Updata mask
+        mask = np.abs(resid) < 7*rms
+        event.masks[n] = mask
+
+    fig, ax = plt.subplots(figsize=(25, 10))
+    event.plot_standardized_data(ax)
+
 
 random.seed(42)
 
+# Load event data
 kmt_dir = '/home/star/fb90/data/KMT/kmtnet/2017/2017/KB170053'
 event = KMTData(kmt_dir)
 event.event_name = 'KMTKB170053'
 
-# Remove worst outliers
-event.remove_worst_outliers()
+# Remove outliers
+remove_outliers(OutlierRemovalModel(event), event)
 
-# Plot data
-fig, ax = plt.subplots(figsize=(25, 10))
-event.plot_standardized_data(ax)
+plt.show()
 
 # Optimize the GP model to remove outliers
-#with PointSourcePointLensWhiteNoise3(event) as model:
+#with OutlierRemovalModel(event) as model:
 #    start = model.test_point
 #    map_soln = xo.optimize(start=start, vars=[model.F_base])
 #    map_soln = xo.optimize(start=map_soln, vars=[model.Delta_F])
 #    map_soln = xo.optimize(start=map_soln, vars=[model.u0])
 #    map_soln = xo.optimize(start=map_soln, vars=[model.t0])
-#    map_soln = xo.optimize(start=map_soln, vars=[model.t0, model.teff])
+#    map_soln = xo.optimize(start=map_soln, vars=[model.u0, model.teff])
 #    map_soln = xo.optimize(start=map_soln)
 #
 #print(map_soln)
@@ -103,12 +120,16 @@ event.plot_standardized_data(ax)
 #plt.show()
 
 # Define output directories
-output_dir4 = 'output/' + event.event_name +\
+output_dir1 = 'output/' + event.event_name +\
         '/PointSourcePointLens'
+output_dir2 = 'output/' + event.event_name +\
+        '/PointSourcePointLensMatern32'
 
 # Create output directory
-if not os.path.exists(output_dir4):
-    os.makedirs(output_dir4)
+if not os.path.exists(output_dir1):
+    os.makedirs(output_dir1)
+if not os.path.exists(output_dir2):
+    os.makedirs(output_dir2)
 
 # Plot data and save theplot
 #fig, ax = plt.subplots(figsize=(25, 10))
@@ -124,4 +145,5 @@ if not os.path.exists(output_dir4):
 #    model_instance.profile(model_instance.logpt).summary()
 
 
-fit_model(PointSourcePointLens(event), output_dir4, 500, 1000)
+#fit_model(PointSourcePointLens(event), output_dir1, 500, 1000)
+#fit_model(PointSourcePointLensMatern32(event), output_dir2, 2000, 3000)
