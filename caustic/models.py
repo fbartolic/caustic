@@ -2,6 +2,7 @@ import numpy as np
 import pymc3 as pm
 import theano
 import theano.tensor as T
+from matplotlib import pyplot as plt
 
 import exoplanet as xo
 from exoplanet.gp import terms, GP
@@ -79,7 +80,14 @@ class SingleLensModel(pm.Model):
         times = np.concatenate([table['HJD'] for table in tables])
         event.masks = tmp
 
-        return np.median(times[fluxes > 4])
+        guess = np.median(times[fluxes > 4])
+
+        cut = 4
+        while np.isnan(guess):
+            guess = np.median(times[fluxes > cut])
+            cut -= 0.5
+
+        return guess
     
     def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
         """
@@ -106,9 +114,9 @@ class SingleLensModel(pm.Model):
         """
         pass
 
-    def evaluate_prior_model_on_grid(self, trace, t_grids, n_samples=50):
+    def evaluate_prior_model_on_grid(self, trace, t_grids):
         """
-        Evaluates a posterior model on a dense grid given samples from a 
+        Evaluates a posterior mean model on a dense grid given samples from a 
         posterior distribution over the model parameters.
         
         Parameters
@@ -120,9 +128,6 @@ class SingleLensModel(pm.Model):
         t_grids : list of 1D Theano tensors
             Time grids on which the model is to be evaluated. The list should
             contain one tensor for each observing band.
-        n_samples : int, optional
-            Number of parameter samples for which the model is to be evaluated,
-            these are randomly picked from the trace object, by default 50.
         
         Returns
         -------
@@ -154,6 +159,86 @@ class SingleLensModel(pm.Model):
             a model MAP prediction in a different band.
         """
         pass
+
+    def sample(self, output_dir, n_tune=2000, n_samples=2000, 
+            target_accept=0.9):
+        """
+        Samples the model posterior distribution using a modified NUTS sampler
+        from the 'exoplanet' package with support for dense mass matrices. 
+        Sampling consists of several tuning steps, in each step an empirical 
+        estimate of the parameter covariance matrix is constructed from the 
+        chains and a linear transformation is applied to the parameter space to
+        remove some of the correlations. Since Hamiltonian Monte Carlo isn't 
+        invariant to affine transformation (as opposed to emcee which is), 
+        this helps remove some of the correlations in the posterior and 
+        usually speeds up sampling by at least an order of magnitude. For more
+        details see Dan's blog post: https://dfm.io/posts/pymc3-mass-matrix/.
+        
+        Parameters
+        ----------
+        output_dir : str
+            Path to directory where the trace is to be saved, together with
+            various diagnostic plots and information.
+        n_tune : int, optional
+            Number of tuning steps, by default 2000
+        n_samples : int, optional
+            Number of sampling steps, by default 2000
+        target_accept : float, optional
+            Target acceptance fraction for the NUTS sampler, high
+            The step size for the leapfrog integrator in NUTS is tuned such 
+            to approximate this acceptance rate. Higher values like 0.9 or 
+            0.95 often work better for problematic posteriors, by default 0.9.
+        """
+
+        sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
+
+        print("Free parameters:\n", self.free_parameters)
+        print("Initial values of logp for each parameter:\n", 
+            self.initial_logps)
+
+        # Run burn-in chains             
+        burnin = sampler.tune(tune=n_tune,
+                step_kwargs=dict(target_accept=target_accept))
+
+        # Run final sampling
+        trace = sampler.sample(draws=n_samples,
+                step_kwargs=dict(target_accept=target_accept))
+
+        # Save trace as a MultiTrace object and a csv
+        pm.save_trace(trace, output_dir + '/model.trace',
+            overwrite=True)
+        df = pm.trace_to_dataframe(trace) 
+        df.to_csv(output_dir + '/trace.csv',)
+        
+        # Save output stats to file
+        df = pm.summary(trace)
+        df = df.round(3)
+        df.to_csv(output_dir + '/sampling_stats.csv')
+
+        # Save stats about divergent samples 
+        with open(output_dir + "/divergences.txt", "w") as text_file:
+            divergent = trace['diverging']
+            print(f'Number of Divergent %d' % divergent.nonzero()[0].size,
+                    file=text_file)
+            divperc = divergent.nonzero()[0].size / len(trace) * 100
+            print(f'Percentage of Divergent %.1f' % divperc, file=text_file)
+
+        # Save traceplots
+#        _ = pm.traceplot(trace)
+#        plt.savefig(output_dir + '/traceplots.png')
+
+        # Save autocorrelation plots for the chains
+        pm.plots.autocorrplot(trace)
+        plt.savefig(output_dir + '/autocorr.png')
+
+        # Save corner plot of the samples
+#        rvs = [rv.name for rv in self.basic_RVs]
+#        pm.pairplot(trace,
+#                    divergences=True, plot_transformed=True, text_size=25,
+#                    varnames=rvs,
+#                    color='C3', figsize=(40, 40), 
+#                    kwargs_divergence={'color': 'C0'})
+#        plt.savefig(output_dir + '/pairplot.png')
 
 class OutlierRemovalModel(SingleLensModel):
     #  override __init__ function from pymc3 Model class
@@ -351,19 +436,19 @@ class PointSourcePointLens(SingleLensModel):
 
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            pm.Lognormal.dist(
-                mu=10*T.ones((self.n_bands, 1)),
-                sd=15.*T.ones((self.n_bands, 1)),
-                testval=3.*T.ones((self.n_bands, 1)),
+            BoundedNormal.dist(
+                mu=T.zeros((self.n_bands, 1)),
+                sd=50.*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.Delta_F))
         self.logp_F_base = pm.Deterministic('logp_F_base',
             pm.Normal.dist(
                 mu=T.zeros((self.n_bands, 1)), 
                 sd=0.6*T.ones((self.n_bands, 1)),
-                testval=T.zeros((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(T.min(self.t[0]), T.max(self.t[0])).logp(self.t0))
+            pm.Uniform.dist(
+                T.min(self.t[0][self.mask[0].nonzero()]), 
+                T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
             BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
@@ -418,13 +503,11 @@ class PointSourcePointLens(SingleLensModel):
                 pm.Normal.dist(
                     mu=T.ones((self.n_bands, 1)),
                     sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
                     shape=(self.n_bands, 1)).logp(self.A))
             self.logp_B = pm.Deterministic('logp_B',
                 pm.Normal.dist(
                     mu=T.zeros((self.n_bands, 1)), 
                     sd=1*T.ones((self.n_bands, 1)),
-                    testval=0.01*T.ones((self.n_bands, 1)),
                     shape=(self.n_bands, 1)).logp(self.B))
 
             # Diagonal terms of the covariance matrix
@@ -449,13 +532,11 @@ class PointSourcePointLens(SingleLensModel):
                 pm.Normal.dist(
                     mu=T.ones((self.n_bands, 1)),
                     sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
                     shape=(self.n_bands, 1)).logp(self.A))
             self.logp_B = pm.Deterministic('logp_B',
                 pm.Normal.dist(
                     mu=T.zeros((self.n_bands, 1)), 
                     sd=5*T.ones((self.n_bands, 1)),
-                    testval=0.01*T.ones((self.n_bands, 1)),
                     shape=(self.n_bands, 1)).logp(self.B))
 
             # Diagonal terms of the covariance matrix
@@ -534,9 +615,11 @@ class PointSourcePointLens(SingleLensModel):
 
         return predictions 
 
-    def evaluate_prior_model_on_grid(self, trace, t_grids, n_samples=50):
+    def evaluate_prior_model_on_grid(self, trace, t_grids):
         # List of numpy arrays with shape(n_samples, n_datapoints) array with 
         # model predictions
+        n_samples = len(np.atleast_1d(trace['t0']))
+
         predictions = [np.zeros((n_samples, 
             int(T.shape(t_grid).eval()))) for t_grid in t_grids]
 
@@ -544,18 +627,22 @@ class PointSourcePointLens(SingleLensModel):
             # Evaluate model for each sample
             for i in range(n_samples):
                 # Tensor which is to be evaluated in model context
-                pred = self.Delta_F[n]*self.magnification(t_grids[n]) +\
+                pred_mean = self.Delta_F[n]*self.magnification(t_grids[n]) +\
                         self.F_base[n]
-                sample = {key:trace[key][i] for key in trace.keys()}
 
-                predictions[n][i] = xo.eval_in_model(pred, sample)
+                if (n_samples==1):
+                    sample = {key:trace[key] for key in trace.keys()}
+                else:
+                    sample = {key:trace[key][i] for key in trace.keys()}
+
+                predictions[n][i] = xo.eval_in_model(pred_mean, sample)
 
         return predictions 
 
     def evaluate_map_model_on_grid(self, t_grids, map_point):
         # List of numpy arrays with shape(n_samples, n_datapoints) array with 
         # model predictions
-        predictions = [np.zeros(nt(T.shape(t_grid).eval())) for t_grid in t_grids]
+        predictions = [np.zeros(T.shape(t_grid).eval()) for t_grid in t_grids]
 
         for n in range(self.n_bands):
             # Tensor which is to be evaluated in model context
@@ -601,19 +688,19 @@ class PointSourcePointLensMatern32(SingleLensModel):
 
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            pm.Lognormal.dist(
-                mu=10*T.ones((self.n_bands, 1)),
-                sd=15.*T.ones((self.n_bands, 1)),
-                testval=3.*T.ones((self.n_bands, 1)),
+            BoundedNormal.dist(
+                mu=T.zeros((self.n_bands, 1)),
+                sd=50.*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.Delta_F))
         self.logp_F_base = pm.Deterministic('logp_F_base',
             pm.Normal.dist(
                 mu=T.zeros((self.n_bands, 1)), 
                 sd=0.6*T.ones((self.n_bands, 1)),
-                testval=T.zeros((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(T.min(self.t[0]), T.max(self.t[0])).logp(self.t0))
+            pm.Uniform.dist(
+                T.min(self.t[0][self.mask[0].nonzero()]), 
+                T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
             BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
@@ -889,7 +976,9 @@ class PointSourcePointLensMarginalized(SingleLensModel):
 
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(T.min(self.t[0]), T.max(self.t[0])).logp(self.t0))
+            pm.Uniform.dist(
+                T.min(self.t[0][self.mask[0].nonzero()]), 
+                T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
             BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
@@ -915,7 +1004,6 @@ class PointSourcePointLensMarginalized(SingleLensModel):
                 pm.Normal.dist(
                     mu=T.ones((self.n_bands, 1)),
                     sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
                     shape=(self.n_bands, 1)).logp(self.A))
             
             # Diagonal terms of the covariance matrix
@@ -946,7 +1034,6 @@ class PointSourcePointLensMarginalized(SingleLensModel):
                 pm.Normal.dist(
                     mu=T.zeros((self.n_bands, 1)), 
                     sd=1*T.ones((self.n_bands, 1)),
-                    testval=0.01*T.ones((self.n_bands, 1)),
                     shape=(self.n_bands, 1)).logp(self.B))
 
             # Diagonal terms of the covariance matrix

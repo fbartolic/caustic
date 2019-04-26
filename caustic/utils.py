@@ -124,11 +124,11 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point):
 
     # Plot predictions for various samples
     for n in range(model_instance.n_bands): # iterate over bands
-        ax[0].plot(t_grids[n].eval(), pred[n], color='C' + str(n), alpha=0.5)
+        ax[0].plot(t_grids[n].eval(), pred[n], color='C' + str(n))
 
     # Calculate and plot residuals
     for n in range(model_instance.n_bands): # iterate over bands
-        residuals =  np.array(tables[n]['flux']) - pred_at_observed_times[n]
+        residuals = np.array(tables[n]['flux']) - pred_at_observed_times[n]
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
             fmt='.', color='C' + str(n))
         ax[1].grid(True)
@@ -160,8 +160,7 @@ def plot_prior_model_samples(ax, event, pm_model, n_samples):
     # Sample from the prior
     with pm_model as model_instance:
         trace = pm.sample_prior_predictive(n_samples)
-        predictions = model_instance.evaluate_prior_model_on_grid(trace, t_grids,
-             n_samples)
+        predictions = model_instance.evaluate_prior_model_on_grid(trace, t_grids)
 
     # Plot data
     event.plot_standardized_data(ax)
@@ -216,6 +215,48 @@ def plot_histograms_of_prior_samples(event, pm_model, output_dir):
             label = key
             ax.hist(value, bins=30);
             plt.savefig(directory + label + '.png')
+
+def remove_outliers(model, event):
+    """
+    Optimizes a flexible PSPL model including a Gaussian Process in order to 
+    flag any outliers.
+    
+    Parameters
+    ----------
+    model : pymc3.Model 
+        PyMC3 Model object.
+    event : caustic.data 
+        Microlensing event data. 
+    """
+    # Remove worst outliers using rolling MAD before doing optimization
+    event.remove_worst_outliers()
+
+    # Optimize a flexible GP model model
+    with model:
+        start = model.test_point
+        map_soln = xo.optimize(start=start, vars=[model.F_base])
+        map_soln = xo.optimize(start=map_soln, vars=[model.Delta_F])
+        map_soln = xo.optimize(start=map_soln, vars=[model.u0])
+        map_soln = xo.optimize(start=map_soln, vars=[model.t0])
+        map_soln = xo.optimize(start=map_soln, vars=[model.u0, model.teff])
+        map_soln = xo.optimize(start=map_soln)
+
+        t_observed = [T._shared(table['HJD']) for table in event.tables]
+        pred_at_observed_times = model.evaluate_map_model_on_grid(
+            t_observed, map_soln)
+
+    # Reomove all points deviating from MAP model by x*sigma_MAD
+    for n in range(model.n_bands):
+        resid = event.tables[n]['flux'] - pred_at_observed_times[n]
+        mad = lambda x: 1.4826*np.median(np.abs(x - np.median(x)))
+        mask = np.abs(resid/mad(resid)) < 7
+
+        # Updata mask
+        event.masks[n] = mask
+
+    # Plot data without outliers
+    fig, ax = plt.subplots(figsize=(25, 10))
+    event.plot(ax)
 
 def plot_violin_plots(ax, pm_models, trace_paths, parameter_names):
     for idx, model in enumerate(pm_models):
