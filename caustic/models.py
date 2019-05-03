@@ -2,6 +2,7 @@ import numpy as np
 import pymc3 as pm
 import theano
 import theano.tensor as T
+from theano.ifelse import ifelse
 from matplotlib import pyplot as plt
 
 import exoplanet as xo
@@ -10,6 +11,10 @@ from exoplanet.gp import terms, GP
 from scipy.special import gamma
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
+
+from astroquery.jplhorizons import Horizons
+from astropy.time import Time
+from astropy import units as u
 
 class SingleLensModel(pm.Model):
     """
@@ -652,6 +657,432 @@ class PointSourcePointLens(SingleLensModel):
             predictions[n] = xo.eval_in_model(pred, map_point)
             
         return predictions 
+
+class PointSourcePointLensAnnualParallax(SingleLensModel):
+    def __init__(self, data, errorbar_rescaling='constant'):
+        super(PointSourcePointLensAnnualParallax, self).__init__(data)
+
+        # Load orbital data from JPL Horizons
+        start = Time(data.tables[0]['HJD'][0], format='jd')
+        stop = Time(data.tables[0]['HJD'][-1], format='jd')
+
+        epochs={'start':start.iso[:10], 'stop':stop.iso[:10], 'step':'6h'}
+        obj = Horizons(id='399', id_type='id', epochs=epochs)
+
+        elements = obj.elements()
+
+        # Calculate the projection of Eath-Sun position vector on the plane
+        # of the sky
+
+        # Transform equatorial event coordinates into ecliptic coordinates
+        event_ecl_coord = self.equatorial_to_ecliptic_coordinates(
+            data.coordinates, 
+            0.5*(data.tables[0]['HJD'][0] + data.tables[0]['HJD'][-1]))
+        lambda_0  = event_ecl_coord['l']
+        beta_0  = event_ecl_coord['b']
+
+        t = np.array(elements['datetime_jd']) # JD
+        e = np.array(elements['e'])
+        tp = np.array(elements['Tp_jd']) # JD
+        n = (2*np.pi/365.25) # mean motion
+        Phi_gamma = (77.86)*np.pi/180 # true anomaly at vernal eq. on J2000
+
+        r_sun = 1 - e*np.cos(n*(t - tp)) # to 1st order in e
+        lambda_sun = n*(t - tp) - Phi_gamma + 2*e*np.sin(n*(t - tp)) # to 1st order in e
+
+        gamma_w = r_sun*np.sin((lambda_sun - lambda_0))
+        gamma_n = r_sun*np.sin(beta_0)*np.cos(lambda_sun - lambda_0)
+
+        gamma_w_dot = n*((1 + e*np.cos(n*(t - tp)))*\
+            np.cos(lambda_sun - lambda_0)+\
+            e*np.sin(n*(t - tp))*np.sin(lambda_sun - lambda_0))
+        gamma_n_dot = -n*np.sin(beta_0)*((1 + e*np.cos(n*(t - tp)))\
+            *np.sin(lambda_sun - lambda_0) -\
+            e*np.sin(n*(t - tp))*np.cos(lambda_sun - lambda_0))
+
+        gamma_w_ddot = -n**2*(1 + 2*e*np.cos(n*(t - tp)))*\
+            np.sin(lambda_sun - lambda_0)
+        gamma_n_ddot = -n**2*np.sin(beta_0)*(1 + 2*e*np.cos(n*(t - tp)))*\
+            np.cos(lambda_sun - lambda_0)
+
+
+        # Need to define an interpolator for all gamma functions for
+        points = [t] # Times for which we have JPL Horizons data
+        gamma_w_interp = xo.interp.RegularGridInterpolator(points, 
+            gamma_w[:, None])
+        gamma_n_interp = xo.interp.RegularGridInterpolator(points, 
+            gamma_n[:, None])
+        gamma_w_dot_interp = xo.interp.RegularGridInterpolator(points, 
+            gamma_w_dot[:, None])
+        gamma_n_dot_interp = xo.interp.RegularGridInterpolator(points, 
+            gamma_n_dot[:, None])
+        gamma_w_ddot_interp = xo.interp.RegularGridInterpolator(points, 
+            gamma_w_dot[:, None])
+        gamma_n_ddot_interp = xo.interp.RegularGridInterpolator(points, 
+            gamma_n_dot[:, None])
+
+        # Interpolate gamma functions onto the grid of observed times, this 
+        # happens only once when the model is initialized
+        n_max =  np.max([len(table) for table in data.tables])
+        self.gamma_w = T._shared(np.stack([np.pad(
+            gamma_w_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
+            (0, n_max - len(table['HJD'])), 'constant', 
+            constant_values=(0.,)) for table in data.tables]))
+        self.gamma_n = T._shared(np.stack([np.pad(
+            gamma_n_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
+            (0, n_max - len(table['HJD'])), 'constant', 
+            constant_values=(0.,)) for table in data.tables]))
+
+        self.gamma_w_dot = T._shared(np.stack([np.pad(
+            gamma_w_dot_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
+            (0, n_max - len(table['HJD'])), 'constant', 
+            constant_values=(0.,)) for table in data.tables]))
+        self.gamma_n_dot = T._shared(np.stack([np.pad(
+            gamma_n_dot_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
+            (0, n_max - len(table['HJD'])), 'constant', 
+            constant_values=(0.,)) for table in data.tables]))
+
+        self.gamma_w_ddot = T._shared(np.stack([np.pad(
+            gamma_w_ddot_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
+            (0, n_max - len(table['HJD'])), 'constant', 
+            constant_values=(0.,)) for table in data.tables]))
+        self.gamma_n_ddot = T._shared(np.stack([np.pad(
+            gamma_n_ddot_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
+            (0, n_max - len(table['HJD'])), 'constant', 
+            constant_values=(0.,)) for table in data.tables]))
+
+        # Define custom prior distributions 
+        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
+        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+        # Initialize linear parameters
+        self.Delta_F = BoundedNormal('Delta_F', 
+            mu=T.zeros((self.n_bands, 1)),
+            sd=50.*T.ones((self.n_bands, 1)),
+            testval=5.*T.ones((self.n_bands, 1)),
+            shape=(self.n_bands, 1))
+
+        self.F_base = pm.Normal('F_base', 
+            mu=T.zeros((self.n_bands, 1)), 
+            sd=0.6*T.ones((self.n_bands, 1)),
+            testval=T.zeros((self.n_bands, 1)),
+            shape=(self.n_bands, 1))
+
+        # Initialize non-linear parameters
+        ## Posterior is multi-modal in t0 and it's critical that the it is 
+        ## initialized near the true value
+        self.t0 = pm.Uniform('t0', T.min(self.t[0][self.mask[0].nonzero()]), 
+            T.max(self.t[0][self.mask[0].nonzero()]), 
+            testval=self.t0_guess(data))
+        self.u0 = pm.Normal('u0', mu=0., sd=1.5, testval=0.1)
+        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
+        
+        # Deterministic transformations
+        self.tE = pm.Deterministic("tE", self.teff/self.u0) 
+
+        ## Save log prior for each parameter for hierarhical modeling 
+        self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
+            BoundedNormal.dist(
+                mu=T.zeros((self.n_bands, 1)),
+                sd=50.*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1)).logp(self.Delta_F))
+        self.logp_F_base = pm.Deterministic('logp_F_base',
+            pm.Normal.dist(
+                mu=T.zeros((self.n_bands, 1)), 
+                sd=0.6*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1)).logp(self.F_base))
+        self.logp_t0 = pm.Deterministic('logp_t0',
+            pm.Uniform.dist(
+                T.min(self.t[0][self.mask[0].nonzero()]), 
+                T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
+        self.logp_u0 = pm.Deterministic('logp_u0', 
+            BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
+        self.logp_teff = pm.Deterministic('logp_teff', 
+            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
+
+        # Parallax parameters
+        self.gamma_w_t0 = gamma_w_interp.evaluate(\
+            T.reshape(self.t0 + 2450000, (1, 1)))[0, 0] 
+        self.gamma_n_t0 = gamma_n_interp.evaluate(\
+            T.reshape(self.t0 + 2450000, (1, 1)))[0, 0]
+        self.gamma_w_dot_t0 = gamma_w_dot_interp.evaluate(\
+            T.reshape(self.t0 + 2450000, (1, 1)))[0, 0]
+        self.gamma_n_dot_t0 = gamma_n_dot_interp.evaluate(\
+            T.reshape(self.t0 + 2450000, (1, 1)))[0, 0]
+        self.gamma_w_ddot_t0 = gamma_w_ddot_interp.evaluate(\
+            T.reshape(self.t0 + 2450000, (1, 1)))[0, 0]
+        self.gamma_n_ddot_t0 = gamma_n_ddot_interp.evaluate(\
+            T.reshape(self.t0 + 2450000, (1, 1)))[0, 0]
+
+        self.a_par = pm.Normal('a_par', mu=0, sd=5, testval=0.1)
+        self.a_vert = pm.Normal('a_vert', mu=0, sd=5, testval=0.1)
+
+        # Compute the likelihood function
+        mag = self.magnification(self.t) 
+        mean_func = self.Delta_F*mag +  self.F_base # mean function
+
+        # Residuals
+        self.r = self.F - mean_func
+
+        if (errorbar_rescaling=='constant'):
+            # Define custom prior distributions 
+            BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
+            BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+            ## Noise model parameters
+            self.A = BoundedNormal1('A', 
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            ## Save log prior for each parameter for hierarhical modeling 
+            self.logp_A = pm.Deterministic('logp_A',
+                pm.Normal.dist(
+                    mu=T.ones((self.n_bands, 1)),
+                    sd=2.*T.ones((self.n_bands, 1)),
+                    testval=1.5*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.A))
+            
+            # Diagonal terms of the covariance matrix
+            self.varF = T.pow(self.A*self.sigF, 2) 
+
+        if (errorbar_rescaling=='additive_variance'):
+            ## Noise model parameters
+            self.A = BoundedNormal1('A', 
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            self.B = BoundedNormal('B', 
+                mu=T.zeros((self.n_bands, 1)), 
+                sd=1*T.ones((self.n_bands, 1)),
+                testval=0.01*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            ## Save log prior for each parameter for hierarhical modeling 
+            self.logp_A = pm.Deterministic('logp_A',
+                pm.Normal.dist(
+                    mu=T.ones((self.n_bands, 1)),
+                    sd=2.*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.A))
+            self.logp_B = pm.Deterministic('logp_B',
+                pm.Normal.dist(
+                    mu=T.zeros((self.n_bands, 1)), 
+                    sd=1*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.B))
+
+            # Diagonal terms of the covariance matrix
+            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
+
+        if (errorbar_rescaling=='flux_dependant'):
+            ## Noise model parameters
+            self.A = BoundedNormal1('A', 
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            self.B = BoundedNormal('B', 
+                mu=T.zeros((self.n_bands, 1)), 
+                sd=5*T.ones((self.n_bands, 1)),
+                testval=0.01*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            ## Save log prior for each parameter for hierarhical modeling 
+            self.logp_A = pm.Deterministic('logp_A',
+                pm.Normal.dist(
+                    mu=T.ones((self.n_bands, 1)),
+                    sd=2.*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.A))
+            self.logp_B = pm.Deterministic('logp_B',
+                pm.Normal.dist(
+                    mu=T.zeros((self.n_bands, 1)), 
+                    sd=5*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.B))
+
+            # Diagonal terms of the covariance matrix
+            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
+
+        # Compute the log-likelihood which is additive across different bands
+        ll = 0 
+        for i in range(self.n_bands):
+            ll += self.log_likelihood_single_band(self.r[i], 
+                self.varF[i], mag[i], self.mask[i])
+
+        pm.Potential('log_likelihood', ll)
+
+        # Define helpful class attributes
+        self.free_parameters = [RV.name for RV in self.basic_RVs]
+        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+
+#    def calculate_gamma_vector_and_derivatives(self, t, tp, e, n, lambda_0, beta_0):
+#        Phi_gamma = (77.86)*np.pi/180 # true anomaly at vernal eq. on J2000
+#
+#        r_sun = 1 - e*np.cos(n*(t - tp)) # to 1st order in e
+#        lambda_sun = n*(t - tp) - Phi_gamma + 2*e*np.sin(n*(t - tp)) # to 1st order in e
+#
+#        gamma_w = r_sun*np.sin((lambda_sun - lambda_0))
+#        gamma_n = r_sun*np.sin(beta_0)*np.cos(lambda_sun - lambda_0)
+#
+#        gamma_w_dot = n*((1 + e*np.cos(n*(t - tp)))*\
+#            np.cos(lambda_sun - lambda_0)+\
+#            e*np.sin(n*(t - tp))*np.sin(lambda_sun - lambda_0))
+#        gamma_n_dot = -n*np.sin(beta_0)*((1 + e*np.cos(n*(t - tp)))\
+#            *np.sin(lambda_sun - lambda_0) -\
+#            e*np.sin(n*(t - tp))*np.cos(lambda_sun - lambda_0))
+#
+#        gamma_w_ddot = -n**2*(1 + 2*e*np.cos(n*(t - tp)))*\
+#            np.sin(lambda_sun - lambda_0)
+#        gamma_n_ddot = -n**2*np.sin(beta_0)*(1 + 2*e*np.cos(n*(t - tp)))*\
+#            np.cos(lambda_sun - lambda_0)
+#
+#        return gamma_w, gamma_n, gamma_w_dot, gamma_n_dot, gamma_w_ddot, gamma_n_ddot
+
+    def calculate_u(self, t):
+        T.printing.Print('u0')(self.u0)
+        sign = ifelse(T.lt(self.u0, 0.), -1., 1.)
+        T.printing.Print('sign')(sign)
+
+        p_E = sign*T.sqrt((self.a_par**2 +\
+             self.a_vert**2)/(self.gamma_w_ddot**2 + self.gamma_n_ddot**2))
+
+        sin_phi = p_E*(self.a_par*self.gamma_n_ddot_t0 -\
+             self.a_vert*self.gamma_w_ddot_t0)/(self.a_par**2 + self.a_vert**2)
+
+        cos_phi = p_E*(self.a_par*self.gamma_w_ddot_t0 +\
+             self.a_vert*self.gamma_n_ddot_t0)/(self.a_par**2 + self.a_vert**2)
+
+        omega_E = 1/self.tE
+
+        u_w = self.u0*(-sin_phi + p_E*(self.gamma_w - self.gamma_w_t0)) +\
+            (omega_E*cos_phi - p_E*self.gamma_w_dot_t0)*(t - self.t0)
+        u_n = self.u0*(cos_phi + p_E*(self.gamma_w - self.gamma_w_t0)) +\
+            (omega_E*sin_phi - p_E*self.gamma_n_dot_t0)*(t - self.t0)
+
+        return T.sqrt(u_w**2 + u_n**2)
+
+    def magnification(self, t):
+        u = self.calculate_u(t)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+
+        return (A(u) - 1)/(A(self.u0) - 1) 
+    
+#    def revert_flux_params_to_nonstandardized_format(self, data):
+#        # Revert F_base and Delta_F to non-standardized units
+#        median_F = np.median(data.tables[0]['flux'])
+#        std_F = np.std(data.tables[0]['flux'])
+#
+#        Delta_F_ = std_F*self.Delta_F + median_F
+#        F_base_ = std_F*self.Delta_F + median_F
+#
+#        # Calculate source flux and blend flux
+#        FS = Delta_F_/(self.peak_mag() - 1)
+#        FB = (F_base_ - FS)/FS
+#
+#        # Convert fluxes to magnitudes
+#        mu_m, sig_m = data.fluxes_to_magnitudes(np.array([FS, FB]), 
+#            np.array([0., 0.]))
+#        mag_source, mag_blend = mu_m
+#
+#        return mag_source, mag_blend
+
+#    def peak_mag(self):
+#        """Returns PSPL magnification at u=u0."""
+#        u = T.sqrt(self.u0**2 + ((self.t - self.t0)/self.tE)**2)
+#        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+#
+#        return A(self.u0)
+
+    def log_likelihood_single_band(self, r, varF, mag, mask):
+        """
+        Implements a white noise Gaussian likelihood function, assuming
+        that the observations in each photometric band are independent. 
+        """
+        # Gaussian likelihood
+        ll = -0.5*T.sum(T.pow(r[mask.nonzero()], 2.)/varF[mask.nonzero()]) -\
+                0.5*T.sum(T.log(2*np.pi*varF[mask.nonzero()]))
+
+        return ll
+        
+    def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
+        # List of numpy arrays with shape(n_samples, n_datapoints) array with 
+        # model predictions
+        predictions = [np.zeros((n_samples, 
+            int(T.shape(t_grid).eval()))) for t_grid in t_grids]
+
+        for n in range(self.n_bands):
+            # Evaluate model for each sample
+            for i, sample in enumerate(xo.get_samples_from_trace(trace, 
+                    size=n_samples)):
+                # Tensor which is to be evaluated in model context
+                pred = self.Delta_F[n]*self.magnification(t_grids[n]) +\
+                        self.F_base[n]
+                
+                predictions[n][i] = xo.eval_in_model(pred, sample)
+
+        return predictions 
+
+    def evaluate_prior_model_on_grid(self, trace, t_grids):
+        # List of numpy arrays with shape(n_samples, n_datapoints) array with 
+        # model predictions
+        n_samples = len(np.atleast_1d(trace['t0']))
+
+        predictions = [np.zeros((n_samples, 
+            int(T.shape(t_grid).eval()))) for t_grid in t_grids]
+
+        for n in range(self.n_bands):
+            # Evaluate model for each sample
+            for i in range(n_samples):
+                # Tensor which is to be evaluated in model context
+                pred_mean = self.Delta_F[n]*self.magnification(t_grids[n]) +\
+                        self.F_base[n]
+
+                if (n_samples==1):
+                    sample = {key:trace[key] for key in trace.keys()}
+                else:
+                    sample = {key:trace[key][i] for key in trace.keys()}
+
+                predictions[n][i] = xo.eval_in_model(pred_mean, sample)
+
+        return predictions 
+
+    def evaluate_map_model_on_grid(self, t_grids, map_point):
+        # List of numpy arrays with shape(n_samples, n_datapoints) array with 
+        # model predictions
+        predictions = [np.zeros(T.shape(t_grid).eval()) for t_grid in t_grids]
+
+        for n in range(self.n_bands):
+            # Tensor which is to be evaluated in model context
+            pred = self.Delta_F[n]*self.magnification(t_grids[n]) +\
+                    self.F_base[n]
+
+            predictions[n] = xo.eval_in_model(pred, map_point)
+            
+        return predictions 
+    
+    def equatorial_to_ecliptic_coordinates(self, coordinates, obs_time):
+        # Earth's obliquity angle
+        T = (obs_time - 2451545)/365.25/100 # julian centuries since J2000
+        eps = 23.439279 - (46.815/60**2)*T
+        R = np.array([[1, 0, 0],
+                    [0, np.cos(eps), np.sin(eps)],
+                    [0, -np.sin(eps), np.cos(eps)]])
+        
+        ra = coordinates.ra.to(u.rad).value
+        dec = coordinates.dec.to(u.rad).value
+        coord_ec_cartesian = np.array([np.cos(ra)*np.cos(dec),
+                                    np.sin(ra)*np.cos(dec),
+                                    np.sin(dec)])
+        
+        # Transformation between equatorial and ecliptical coordinates
+        coord_eq_cartesian = R @ coord_ec_cartesian[:, np.newaxis]
+        
+        b = np.arcsin(coord_eq_cartesian[2])
+        l = 2*np.arctan(coord_eq_cartesian[1]/(np.cos(b) + coord_eq_cartesian[0]))
+        
+        return {'l':l, 'b':b}
 
 class PointSourcePointLensMatern32(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant'):

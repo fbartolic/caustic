@@ -216,7 +216,7 @@ class Data(object):
                 ax.errorbar(table['HJD'][~mask] - 2450000,
                     table['flux'][~mask], 
                     table['flux_err'][~mask], fmt='.', color='C' + str(i),
-                    ecolor='C' + str(i), alpha=0.15)
+                    ecolor='C' + str(i), alpha=0.15, label='outliers')
         else:
             for i, table in enumerate(self.tables):
                 ax.errorbar(table['HJD'] - 2450000, table['mag'], 
@@ -253,8 +253,10 @@ class Data(object):
         ax.legend(prop={'size': 16})
 
     def remove_worst_outliers(self, window_size=7, mad_cutoff=5):
-        tables = self.tables
-        for i, table in enumerate(tables):
+        if not (self.units=='fluxes'):
+            self.convert_data_to_fluxes()
+
+        for i, table in enumerate(self.tables):
             series = pd.Series(table['flux']) 
             mad = lambda x: 1.4826*np.median(np.abs(x - np.median(x)))
             rolling_mad = np.array(series.rolling(window_size, 
