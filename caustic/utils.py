@@ -54,9 +54,9 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
     """
     # Load standardized data
     tables = event.get_standardized_data()
-    t_grids = [T._shared(np.linspace(table['HJD'][0], table['HJD'][-1], 2000))\
+    t_grids = [np.linspace(table['HJD'][0], table['HJD'][-1], 2000)\
         for table in tables]
-    t_observed = [T._shared(table['HJD']) for table in tables]
+    t_observed = [table['HJD'] for table in tables]
 
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
@@ -75,7 +75,7 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
     # Plot predictions for various samples
     for n in range(model_instance.n_bands): # iterate over bands
         for i in range(n_samples):
-            ax[0].plot(t_grids[n].eval(), pred[n][i, :], color='C' + str(n), 
+            ax[0].plot(t_grids[n], pred[n][i, :], color='C' + str(n), 
                 alpha=0.2)
     # Calculate and plot residuals
     for n in range(model_instance.n_bands): # iterate over bands
@@ -124,7 +124,7 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point):
 
     # Plot predictions for various samples
     for n in range(model_instance.n_bands): # iterate over bands
-        ax[0].plot(t_grids[n].eval(), pred[n], color='C' + str(n))
+        ax[0].plot(t_grids[n], pred[n], color='C' + str(n))
 
     # Calculate and plot residuals
     for n in range(model_instance.n_bands): # iterate over bands
@@ -154,7 +154,7 @@ def plot_prior_model_samples(ax, event, pm_model, n_samples):
     """
     # Load standardized data
     tables = event.get_standardized_data()
-    t_grids = [T._shared(np.linspace(table['HJD'][0], table['HJD'][-1], 2000))\
+    t_grids = [np.linspace(table['HJD'][0], table['HJD'][-1], 2000)\
         for table in tables]
 
     # Sample from the prior
@@ -169,7 +169,7 @@ def plot_prior_model_samples(ax, event, pm_model, n_samples):
     # Plot predictions for various samples
     for i in range(n_samples):
         for n in range(model_instance.n_bands): # iterate over bands
-            ax.plot(t_grids[n].eval(), predictions[n][i, :], color='C' + str(n), 
+            ax.plot(t_grids[n], predictions[n][i, :], color='C' + str(n), 
                 alpha=0.5)
 
 def plot_histograms_of_prior_samples(event, pm_model, output_dir):
@@ -191,7 +191,7 @@ def plot_histograms_of_prior_samples(event, pm_model, output_dir):
     """
     # Sample from the prior
     n_samples = 5000
-    with pm_model as model_instance:
+    with pm_model:
         trace = pm.sample_prior_predictive(n_samples)
 
     directory = output_dir + '/prior_samples/'
@@ -204,7 +204,7 @@ def plot_histograms_of_prior_samples(event, pm_model, output_dir):
         # Some parameters are multivariate and in those cases the keys have 
         # different dimensions
         if value.ndim > 1:
-            for i in range(value.ndim):
+            for i in range(len(value[0])):
                 fig, ax = plt.subplots() 
                 label = key + str(i)
                 ax.hist(value[:, i], bins=30);
