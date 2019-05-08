@@ -18,8 +18,9 @@ from astropy import units as u
 class SingleLensModel(pm.Model):
     """
     Skeleton class for a single lens model. Classes which inherit from this class 
-    should implement the `magnification`, `log_likelihood`, 
-    `evaluate_posterior_model_on_grid` and `evaluate_map_model_on_grid` methods.
+    should implement the `magnification`, `log_likelihood`, and if needed, the
+    `evaluate_posterior_model_on_grid`, `evaluate_prior_model_on_grid`, and
+    `evaluate_map_model_on_grid` methods.
     """
     #  override __init__ function from pymc3 Model class
     def __init__(self, data, name='', model=None):
@@ -162,11 +163,13 @@ class SingleLensModel(pm.Model):
             predictions[i] = xo.eval_in_model(pred_mean, sample)
 
         # Construct list of predictions
+        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[:, i, :])
+            pred_list.append(predictions[:, i, ~mask_numpy])
 
         return pred_list
+
 
     def evaluate_prior_model_on_grid(self, trace, t_grids):
         """
@@ -251,9 +254,10 @@ class SingleLensModel(pm.Model):
         predictions = xo.eval_in_model(pred_mean, map_point)
 
         # Construct list of predictions
+        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[i, :])
+            pred_list.append(predictions[i, ~mask_numpy])
 
         return pred_list
 
@@ -328,13 +332,6 @@ class SingleLensModel(pm.Model):
         pm.plots.autocorrplot(trace)
         plt.savefig(output_dir + '/autocorr.png')
 
-        # Save corner plot of the samples
-#        rvs = [rv.name for rv in self.basic_RVs]
-#        pm.pairplot(trace,
-#                    divergences=True, 
-#                    figsize=(40, 40), 
-#                    divergences_kwargs={'color': 'C0'})
-#        plt.savefig(output_dir + '/pairplot.png')
         return trace
 
 class OutlierRemovalModel(SingleLensModel):
@@ -759,13 +756,11 @@ class FiniteSourcePointLens(SingleLensModel):
 
         # Specify finite source parameters
         self.rho_star = BoundedNormal('rho_star', mu=0., sd=1., testval=0.01)
-#        self.t_star = BoundedNormal('t_star', mu=0., sd=10., testval=0.1)
         self.gamma_lambda = BoundedNormal('gamma_lambda', 
             mu=T.zeros((self.n_bands, 1)),
             sd=1.*T.ones((self.n_bands, 1)),
             testval=0.5*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
-#        self.rho_star = pm.Deterministic("rho_star", self.t_star/self.tE) 
 
         # Compute the likelihood function
         mag = self.magnification(self.t) 
@@ -873,7 +868,6 @@ class FiniteSourcePointLens(SingleLensModel):
             (self.B0_interp.evaluate(z.T).T - self.gamma_lambda*\
             self.B1_interp.evaluate(z.T).T)
 
-#        rho_star = self.t_star/self.tE
         z = u/self.rho_star
 
         return (A(u, z) - 1)/(A(self.u0, z) - 1) 
@@ -962,23 +956,12 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             (0, n_max - len(table['HJD'])), 'constant', 
             constant_values=(0.,)) for table in data.tables]))
 
-#        gamma_w_dot = T._shared(np.stack([np.pad(
-#            self.gamma_w_dot_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
-#            (0, n_max - len(table['HJD'])), 'constant', 
-#            constant_values=(0.,)) for table in data.tables]))
-#        gamma_n_dot = T._shared(np.stack([np.pad(
-#            self.gamma_n_dot_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
-#            (0, n_max - len(table['HJD'])), 'constant', 
-#            constant_values=(0.,)) for table in data.tables]))
-#
-#        gamma_w_ddot = T._shared(np.stack([np.pad(
-#            self.gamma_w_ddot_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
-#            (0, n_max - len(table['HJD'])), 'constant', 
-#            constant_values=(0.,)) for table in data.tables]))
-#        gamma_n_ddot = T._shared(np.stack([np.pad(
-#            self.gamma_n_ddot_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
-#            (0, n_max - len(table['HJD'])), 'constant', 
-#            constant_values=(0.,)) for table in data.tables]))
+        # Acceleration parameters
+#        self.a_par = pm.Exponential('a_par', lam=10, testval=0.01)
+#        self.a_vert = pm.Exponential('a_vert', lam=10, testval=0.01)
+
+        self.a_par = pm.Normal('a_par', mu=0, sd=0.1, testval=0.01)
+        self.a_vert = pm.Normal('a_vert', mu=0, sd=0.1, testval=0.01)
 
         # Define custom prior distributions 
         BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
@@ -1003,8 +986,8 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         self.t0_prime = pm.Uniform('t0_prime', T.min(self.t[0][self.mask[0].nonzero()]), 
             T.max(self.t[0][self.mask[0].nonzero()]), 
             testval=self.t0_guess(data))
-        self.u0_prime = pm.Normal('u0_prime', mu=0., sd=1.5, testval=0.1)
-        self.omega_E_prime = BoundedNormal('omega_E_prime', mu=0., sd=1., 
+        self.u0_prime = pm.Normal('u0_prime', mu=0., sd=1., testval=0.05)
+        self.omega_E_prime = BoundedNormal('omega_E_prime', mu=0., sd=0.5, 
             testval=0.05)
         
         ## Save log prior for each parameter for hierarhical modeling 
@@ -1027,55 +1010,15 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
 #        self.logp_teff = pm.Deterministic('logp_teff', 
 #            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
-        # Parallax parameters
-#        gamma_w_t0 = gamma_w_interp.evaluate(\
-#            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0] 
-#        gamma_n_t0 = gamma_n_interp.evaluate(\
-#            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
-#        gamma_w_dot_t0 = gamma_w_dot_interp.evaluate(\
-#            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
-#        gamma_n_dot_t0 = gamma_n_dot_interp.evaluate(\
-#            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
-#        gamma_w_ddot_t0 = gamma_w_ddot_interp.evaluate(\
-#            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
-#        gamma_n_ddot_t0 = gamma_n_ddot_interp.evaluate(\
-#            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
-
-        self.a_par = pm.Normal('a_par', mu=0, sd=5, testval=0.1)
-        self.a_vert = pm.Normal('a_vert', mu=0, sd=5, testval=0.1)
-
-        # Compute u(t)
-#        sign = self.u0_prime/T.abs_(self.u0_prime)
-#        p_E = sign*T.sqrt((self.a_par**2 +\
-#             self.a_vert**2)/(gamma_w_ddot_t0**2 + gamma_n_ddot_t0**2))
-#
-#        sin_phi = p_E*(self.a_par*gamma_n_ddot_t0 -\
-#             self.a_vert*gamma_w_ddot_t0)/(self.a_par**2 + self.a_vert**2)
-#
-#        cos_phi = p_E*(self.a_par*gamma_w_ddot_t0 +\
-#             self.a_vert*gamma_n_ddot_t0)/(self.a_par**2 + self.a_vert**2)
-#
-#        u_w = self.u0_prime*(-sin_phi + p_E*(gamma_w - gamma_w_t0)) +\
-#            (self.omega_E_prime*cos_phi - p_E*gamma_w_dot_t0)*(self.t - self.t0_prime)
-#        u_n = self.u0_prime*(cos_phi + p_E*(gamma_n - gamma_n_t0)) +\
-#            (self.omega_E_prime*sin_phi - p_E*gamma_n_dot_t0)*(self.t - self.t0_prime)
-
-        # Deterministic transform
-#        t_E =  1/T.sqrt(self.omega_E_prime**2 -\
-#            2*self.omega_E_prime*p_E*(gamma_w_dot_t0*cos_phi +\
-#            gamma_n_dot_t0*sin_phi) + p_E**2*(gamma_w_dot_t0**2 +\
-#            gamma_n_dot_t0**2))
-#        
-#        self.tE = pm.Deterministic('t_E', t_E)
-#        self.u = T.sqrt(u_w**2 + u_n**2)
-
         # Compute the likelihood function
-        self.tE = 0.
+        self.t_E = 0.
+        self.pi_E = 0.
         mag = self.magnification(self.t, gamma_w, gamma_n) 
         mean_func = self.Delta_F*mag +  self.F_base # mean function
 
-        # Calculate t_E
-        pm.Deterministic('tE', self.tE)
+        # Save t_E, and pi_E parameters to trace
+        pm.Deterministic('t_E', self.t_E)
+        pm.Deterministic('pi_E', self.pi_E)
 
         # Residuals
         self.r = self.F - mean_func
@@ -1210,7 +1153,8 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             gamma_n_dot_t0*sin_phi) + p_E**2*(gamma_w_dot_t0**2 +\
             gamma_n_dot_t0**2))
         
-        self.tE = t_E
+        self.t_E = t_E
+        self.pi_E = self.u0_prime*p_E
 
         return T.sqrt(u_w**2 + u_n**2)  
 
@@ -1239,11 +1183,11 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
 
         gamma_w, _ = self.construct_masked_tensor(
-            [self.gamma_w_interp.evaluate(t_grid[:, None]).eval().ravel()\
+            [self.gamma_w_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
                 for t_grid in t_grids])
 
         gamma_n, _ = self.construct_masked_tensor(
-            [self.gamma_n_interp.evaluate(t_grid[:, None]).eval().ravel()\
+            [self.gamma_n_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
                 for t_grid in t_grids])
 
         # Evaluate model for each sample
@@ -1256,9 +1200,10 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             predictions[i] = xo.eval_in_model(pred_mean, sample)
 
         # Construct list of predictions
+        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[:, i, :])
+            pred_list.append(predictions[:, i, ~mask_numpy])
 
         return pred_list
 
@@ -1271,11 +1216,11 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
 
         gamma_w, _ = self.construct_masked_tensor(
-            [self.gamma_w_interp.evaluate(t_grid[:, None]).eval().ravel()\
+            [self.gamma_w_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
                 for t_grid in t_grids])
 
         gamma_n, _ = self.construct_masked_tensor(
-            [self.gamma_n_interp.evaluate(t_grid[:, None]).eval().ravel()\
+            [self.gamma_n_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
                 for t_grid in t_grids])
 
         # Evaluate model for each sample
@@ -1292,9 +1237,10 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             predictions[i] = xo.eval_in_model(pred_mean, sample)
 
         # Construct list of predictions
+        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[:, i, :])
+            pred_list.append(predictions[:, i, ~mask_numpy])
 
         return pred_list
 
@@ -1306,11 +1252,11 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
 
         gamma_w, _ = self.construct_masked_tensor(
-            [self.gamma_w_interp.evaluate(t_grid[:, None]).eval().ravel()\
+            [self.gamma_w_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
                 for t_grid in t_grids])
 
         gamma_n, _ = self.construct_masked_tensor(
-            [self.gamma_n_interp.evaluate(t_grid[:, None]).eval().ravel()\
+            [self.gamma_n_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
                 for t_grid in t_grids])
 
  
@@ -1321,9 +1267,10 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         predictions = xo.eval_in_model(pred_mean, map_point)
 
         # Construct list of predictions
+        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[i, :])
+            pred_list.append(predictions[i, ~mask_numpy])
 
         return pred_list
 
