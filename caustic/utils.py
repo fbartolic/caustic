@@ -56,7 +56,7 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
     tables = event.get_standardized_data()
     t_grids = [np.linspace(table['HJD'][0], table['HJD'][-1], 2000)\
         for table in tables]
-    t_observed = [table['HJD'] for table in tables]
+    t_observed = [np.array(table['HJD']) for table in tables]
 
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
@@ -162,15 +162,13 @@ def plot_prior_model_samples(ax, event, pm_model, n_samples):
         trace = pm.sample_prior_predictive(n_samples)
         predictions = model_instance.evaluate_prior_model_on_grid(trace, t_grids)
 
-    # Plot data
-    event.plot_standardized_data(ax)
-    ax.set_xlabel('HJD - 2450000')
-
     # Plot predictions for various samples
     for i in range(n_samples):
         for n in range(model_instance.n_bands): # iterate over bands
             ax.plot(t_grids[n], predictions[n][i, :], color='C' + str(n), 
                 alpha=0.5)
+
+    ax.set_xlabel('HJD - 2450000')
 
 def plot_histograms_of_prior_samples(event, pm_model, output_dir):
     """

@@ -38,6 +38,9 @@ class SingleLensModel(pm.Model):
         self.t, self.mask = self.construct_masked_tensor(t_list)
         self.F, _ = self.construct_masked_tensor(F_list)
         self.sigF, _ = self.construct_masked_tensor(sigF_list)
+
+        self.errorbar_rescaling = 'constant'
+        self.kernel = 'white_noise'
     
     def construct_masked_tensor(self, array_list):
         """
@@ -93,15 +96,6 @@ class SingleLensModel(pm.Model):
         """
         pass
 
-    def log_likelihood_single_band(self):
-        """
-        Implements a white noise Gaussian likelihood function, assuming
-        that the observations in each photometric band are independent. 
-        Subclasses should overload this method if necessary.
-        """
-        pass
-
-   
     def t0_guess(self, event):
         """
         Guesses an intial value for the t0 parameter. This is necessary because
@@ -123,6 +117,180 @@ class SingleLensModel(pm.Model):
             cut -= 0.5
 
         return guess
+
+    def compute_varF(self, errorbar_rescaling='constant'):
+        if (errorbar_rescaling=='constant'):
+            # Define custom prior distributions 
+            BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
+            BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+            ## Noise model parameters
+            self.A = BoundedNormal1('A', 
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            ## Save log prior for each parameter for hierarhical modeling 
+            self.logp_A = pm.Deterministic('logp_A',
+                pm.Normal.dist(
+                    mu=T.ones((self.n_bands, 1)),
+                    sd=2.*T.ones((self.n_bands, 1)),
+                    testval=1.5*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.A))
+            
+            # Diagonal terms of the covariance matrix
+            self.varF = T.pow(self.A*self.sigF, 2) 
+
+        if (errorbar_rescaling=='additive_variance'):
+            ## Noise model parameters
+            self.A = BoundedNormal1('A', 
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            self.B = BoundedNormal('B', 
+                mu=T.zeros((self.n_bands, 1)), 
+                sd=1*T.ones((self.n_bands, 1)),
+                testval=0.01*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            ## Save log prior for each parameter for hierarhical modeling 
+            self.logp_A = pm.Deterministic('logp_A',
+                pm.Normal.dist(
+                    mu=T.ones((self.n_bands, 1)),
+                    sd=2.*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.A))
+            self.logp_B = pm.Deterministic('logp_B',
+                pm.Normal.dist(
+                    mu=T.zeros((self.n_bands, 1)), 
+                    sd=1*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.B))
+
+            # Diagonal terms of the covariance matrix
+            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
+
+        if (errorbar_rescaling=='flux_dependant'):
+            ## Noise model parameters
+            self.A = BoundedNormal1('A', 
+                mu=T.ones((self.n_bands, 1)),
+                sd=2.*T.ones((self.n_bands, 1)),
+                testval=1.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            self.B = BoundedNormal('B', 
+                mu=T.zeros((self.n_bands, 1)), 
+                sd=5*T.ones((self.n_bands, 1)),
+                testval=0.01*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            ## Save log prior for each parameter for hierarhical modeling 
+            self.logp_A = pm.Deterministic('logp_A',
+                pm.Normal.dist(
+                    mu=T.ones((self.n_bands, 1)),
+                    sd=2.*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.A))
+            self.logp_B = pm.Deterministic('logp_B',
+                pm.Normal.dist(
+                    mu=T.zeros((self.n_bands, 1)), 
+                    sd=5*T.ones((self.n_bands, 1)),
+                    shape=(self.n_bands, 1)).logp(self.B))
+
+            # Diagonal terms of the covariance matrix
+            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.magnification(self.t)*self.B, 2)
+
+    def init_matern32_noise_model(self):
+        def solve_for_invgamma_params(params, x_min, x_max):
+            """
+            Returns parameters of an inverse gamma distribution p(x) such that 
+            0.1% of total prob. mass is assigned to values of x < x_min and 
+            1% of total prob. masss  to values greater than x_max.
+            """
+            lower_mass = 0.01
+            upper_mass = 0.99
+
+            # Trial parameters
+            alpha, beta = params
+
+            # Equation for the roots defining params which satisfy the constraint
+            return (invgamma.cdf(x_min, alpha, scale=beta) - \
+                lower_mass, invgamma.cdf(x_max, alpha, scale=beta) - upper_mass)
+
+        # Compute parameters for the prior on GP hyperparameters
+        invgamma_a = np.zeros(self.n_bands)
+        invgamma_b = np.zeros(self.n_bands)
+
+        for i in range(self.n_bands):
+            t_ = self.t[i].eval()
+            invgamma_a[i], invgamma_b[i] = fsolve(solve_for_invgamma_params, 
+                (0.1, 0.1), (np.median(np.diff(t_)), t_[-1] - t_[0]))
+
+        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
+        self.sigma = BoundedNormal('sigma', 
+            mu=T.zeros((self.n_bands, 1)),
+            sd=3.*T.ones((self.n_bands, 1)),
+            testval=0.5*T.ones((self.n_bands, 1)),
+            shape=(self.n_bands, 1))
+
+        self.rho = pm.InverseGamma('rho', 
+            alpha = T._shared(invgamma_a)*T.ones((self.n_bands, 1)),
+            beta = T._shared(invgamma_b)*T.ones((self.n_bands, 1)),
+            testval=2.*T.ones((self.n_bands, 1)),
+            shape=(self.n_bands, 1))
+
+        # Save log prior for each parameter, this is needed for hierarchical
+        # modeling of multiple events using the importance resampling trick
+        self.logp_sigma = pm.Deterministic('logp_sigma',
+            BoundedNormal.dist(
+                mu=T.zeros((self.n_bands, 1)),
+                sd=3.*T.ones((self.n_bands, 1)),
+                testval=0.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1)).logp(self.sigma))
+        self.logp_rho = pm.Deterministic('logp_rho',
+            pm.InverseGamma.dist(
+                alpha = T._shared(invgamma_a)*T.ones((self.n_bands, 1)),
+                beta = T._shared(invgamma_b)*T.ones((self.n_bands, 1)),
+                testval=0.5*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1)).logp(self.rho))
+
+    def ll_single_band_matern32(self, band_idx):
+        t = self.t[band_idx][self.mask[band_idx].nonzero()]
+        r = self.r[band_idx][self.mask[band_idx].nonzero()]
+        varF = self.varF[band_idx][self.mask[band_idx].nonzero()]
+        
+        kernel = terms.Matern32Term(sigma=self.sigma, rho=self.rho)
+        # The exoplanet.gp.GP constructor takes an optional argument J which 
+        # specifies the width of the problem if it is known at compile time. 
+        # This is actually two times the J from the celerite paper
+        gp = GP(kernel, t, varF, J=2) # J=2 for Matern32 kernel
+
+        # Add a custom "potential" (log probability function) with the 
+        # GP likelihood
+        return gp.log_likelihood(r)
+
+    def ll_single_band_gaussian(self, band_idx):
+        """
+        Implements a white noise Gaussian likelihood function, assuming
+        that the observations in each photometric band are independent. 
+        """
+        r = self.r[band_idx][self.mask[band_idx].nonzero()]
+        varF = self.varF[band_idx][self.mask[band_idx].nonzero()]
+
+        # Gaussian likelihood
+        ll = -0.5*T.sum(T.pow(r, 2.)/varF) -\
+                0.5*T.sum(T.log(2*np.pi*varF))
+
+        return ll
+
+    def log_likelihood(self):
+        # Compute the log-likelihood which is additive across different bands
+        ll = 0 
+        for i in range(self.n_bands):
+#            ll += self.ll_single_band_gaussian(i)
+            ll += self.ll_single_band_matern32(i)
+
+        pm.Potential('log_likelihood', ll)
     
     def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
         """
@@ -438,9 +606,6 @@ class OutlierRemovalModel(SingleLensModel):
         1% of total prob. masss  to values greater than x_max.
         """
 
-        def inverse_gamma_cdf(x, alpha, beta):
-            return invgamma.cdf(x, alpha, scale=beta)
-
         lower_mass = 0.01
         upper_mass = 0.99
 
@@ -448,8 +613,8 @@ class OutlierRemovalModel(SingleLensModel):
         alpha, beta = params
 
         # Equation for the roots defining params which satisfy the constraint
-        return (inverse_gamma_cdf(x_min, alpha, beta) - \
-            lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
+        return (invgamma.cdf(x_min, alpha, scale=beta) - \
+            lower_mass, invgamma.cdf(x_max, alpha, scale=beta) - upper_mass)
 
     def log_likelihood_single_band(self, t, r, varF, sigma, rho, mask):
         # Calculate likelihood
@@ -548,6 +713,8 @@ class PointSourcePointLens(SingleLensModel):
         self.logp_teff = pm.Deterministic('logp_teff', 
             BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
+        self.compute_varF()
+        
         # Compute the likelihood function
         mag = self.magnification(self.t) 
         mean_func = self.Delta_F*mag +  self.F_base # mean function
@@ -555,94 +722,8 @@ class PointSourcePointLens(SingleLensModel):
         # Residuals
         self.r = self.F - mean_func
 
-        if (errorbar_rescaling=='constant'):
-            # Define custom prior distributions 
-            BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-            BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) 
-
-        if (errorbar_rescaling=='additive_variance'):
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            self.B = BoundedNormal('B', 
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=1*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=1*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
-
-        if (errorbar_rescaling=='flux_dependant'):
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            self.B = BoundedNormal('B', 
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=5*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
-
-        # Compute the log-likelihood which is additive across different bands
-        ll = 0 
-        for i in range(self.n_bands):
-            ll += self.log_likelihood_single_band(self.r[i], 
-                self.varF[i], mag[i], self.mask[i])
-
-        pm.Potential('log_likelihood', ll)
+        self.init_matern32_noise_model()
+        self.log_likelihood()
 
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
@@ -680,16 +761,16 @@ class PointSourcePointLens(SingleLensModel):
 #
 #        return A(self.u0)
 
-    def log_likelihood_single_band(self, r, varF, mag, mask):
-        """
-        Implements a white noise Gaussian likelihood function, assuming
-        that the observations in each photometric band are independent. 
-        """
-        # Gaussian likelihood
-        ll = -0.5*T.sum(T.pow(r[mask.nonzero()], 2.)/varF[mask.nonzero()]) -\
-                0.5*T.sum(T.log(2*np.pi*varF[mask.nonzero()]))
-
-        return ll
+#    def log_likelihood_single_band(self, r, varF, mag, mask):
+#        """
+#        Implements a white noise Gaussian likelihood function, assuming
+#        that the observations in each photometric band are independent. 
+#        """
+#        # Gaussian likelihood
+#        ll = -0.5*T.sum(T.pow(r[mask.nonzero()], 2.)/varF[mask.nonzero()]) -\
+#                0.5*T.sum(T.log(2*np.pi*varF[mask.nonzero()]))
+#
+#        return ll
 
 class FiniteSourcePointLens(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant'):
@@ -769,86 +850,7 @@ class FiniteSourcePointLens(SingleLensModel):
         # Residuals
         self.r = self.F - mean_func
 
-        if (errorbar_rescaling=='constant'):
-            # Define custom prior distributions 
-            BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-            BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) 
-
-        if (errorbar_rescaling=='additive_variance'):
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            self.B = BoundedNormal('B', 
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=1*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=1*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
-
-        if (errorbar_rescaling=='flux_dependant'):
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            self.B = BoundedNormal('B', 
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=5*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
+        self.compute_varF()
 
         # Compute the log-likelihood which is additive across different bands
         ll = 0 
@@ -1023,86 +1025,7 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         # Residuals
         self.r = self.F - mean_func
 
-        if (errorbar_rescaling=='constant'):
-            # Define custom prior distributions 
-            BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-            BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) 
-
-        if (errorbar_rescaling=='additive_variance'):
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            self.B = BoundedNormal('B', 
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=1*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=1*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
-
-        if (errorbar_rescaling=='flux_dependant'):
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            self.B = BoundedNormal('B', 
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=5*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
+        self.compute_varF()
 
         # Compute the log-likelihood which is additive across different bands
         ll = 0 
@@ -1356,90 +1279,7 @@ class PointSourcePointLensMatern32(SingleLensModel):
         # Residuals
         self.r = self.F - mean_func
 
-        if (errorbar_rescaling=='constant'):
-            # Define custom prior distributions 
-            BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-            BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) 
-
-        if (errorbar_rescaling=='additive_variance'):
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            self.B = BoundedNormal('B', 
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=1*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=1*T.ones((self.n_bands, 1)),
-                    testval=0.01*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
-
-        if (errorbar_rescaling=='flux_dependant'):
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            self.B = BoundedNormal('B', 
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=5*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=5*T.ones((self.n_bands, 1)),
-                    testval=0.01*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
+        self.compute_varF()
 
         ## Compute parameters for the prior on GP hyperparameters
         tables = data.get_standardized_data()
@@ -1630,88 +1470,7 @@ class PointSourcePointLensMarginalized(SingleLensModel):
         # Compute the likelihood function
         self.mag = self.magnification(self.t) 
 
-        if (errorbar_rescaling=='constant'):
-            # Define custom prior distributions 
-            BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-            BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) 
-
-        if (errorbar_rescaling=='additive_variance'):
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            self.B = BoundedNormal('B', 
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=1*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=1*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
-
-        if (errorbar_rescaling=='flux_dependant'):
-            ## Noise model parameters
-            self.A = BoundedNormal1('A', 
-                mu=T.ones((self.n_bands, 1)),
-                sd=2.*T.ones((self.n_bands, 1)),
-                testval=1.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            self.B = BoundedNormal('B', 
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=5*T.ones((self.n_bands, 1)),
-                testval=0.01*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=5*T.ones((self.n_bands, 1)),
-                    testval=0.01*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
-            # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(mag*self.B, 2)
+        self.compute_varF()
 
         # Compute the log-likelihood which is additive across different bands
         ll = 0 

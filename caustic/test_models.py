@@ -63,17 +63,17 @@ print("PyMC3 version", pm.__version__)
 #    errorbar_rescaling='additive_variance'), 100)
 #plt.show()
 
-#with PointSourcePointLens(event, 
-#    errorbar_rescaling='additive_variance') as model1:
-#    model1.sample(output_dir1, n_tune=2000, n_samples=2000)
+with PointSourcePointLens(event, 
+    errorbar_rescaling='additive_variance') as model1:
+    model1.sample(output_dir1, n_tune=2000, n_samples=2000)
 #with FiniteSourcePointLens(event, 
 #    errorbar_rescaling='additive_variance') as model2:
 #    trace2 = model2.sample(output_dir2, n_tune=3000, n_samples=2000)
 #    trace2 = pm.load_trace(output_dir2 + '/model.trace')
-with PointSourcePointLensAnnualParallax(event, 
-    errorbar_rescaling='additive_variance') as model3:
-#    trace3 = model3.sample(output_dir3, n_tune=3000, n_samples=3000)
-    trace3 = pm.load_trace(output_dir3 + '/model.trace')
+#with PointSourcePointLensAnnualParallax(event, 
+#    errorbar_rescaling='additive_variance') as model3:
+##    trace3 = model3.sample(output_dir3, n_tune=3000, n_samples=3000)
+#    trace3 = pm.load_trace(output_dir3 + '/model.trace')
 
 fig, ax = plt.subplots()
 ax.hist(trace3['pi_E'])
