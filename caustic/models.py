@@ -17,20 +17,35 @@ from astropy import units as u
 
 class SingleLensModel(pm.Model):
     """
-    Skeleton class for a single lens model. Classes which inherit from this class 
-    should implement the `magnification`, `log_likelihood`, and if needed, the
+    Abstract class for a single lens model.  Subclasses should implement the
+    should implement the `magnification` method, and if needed, the
     `evaluate_posterior_model_on_grid`, `evaluate_prior_model_on_grid`, and
-    `evaluate_map_model_on_grid` methods.
+    `evaluate_map_model_on_grid` methods. All of the noise models are 
+    implemented in this class. Subclasses implement forward models which 
+    compute the magnification.
     """
     #  override __init__ function from pymc3 Model class
-    def __init__(self, data, name='', model=None):
-        super(SingleLensModel, self).__init__(name, model)
+    def __init__(self, data, errorbar_rescaling='constant', kernel='white_noise'):
+        """
+        Parameters
+        ----------
+        data : caustic.data 
+            Caustic data object.
+        errorbar_rescaling : str, optional
+            Defines how the error bars are treated in models. Choose between 
+            'constant', 'additive_variance', and  'flux_dependant', by default 
+            'constant'.
+        kernel : str, optional
+            Choose a GP kernel, options are 'white_noise' and 'matern32', by 
+            default 'white_noise'.
+        """
+        super(SingleLensModel, self).__init__()
 
         # Load and rescale the data to zero median and unit variance
         tables = data.get_standardized_data()
         self.n_bands = len(tables) # number of photometric bands
 
-        # Construct theano tensors which are used in computing the models
+        # Construct tensors used for computing the models
         t_list = [np.array(table['HJD']) for table in tables]
         F_list = [np.array(table['flux']) for table in tables]
         sigF_list = [np.array(table['flux_err']) for table in tables]
@@ -39,8 +54,22 @@ class SingleLensModel(pm.Model):
         self.F, _ = self.construct_masked_tensor(F_list)
         self.sigF, _ = self.construct_masked_tensor(sigF_list)
 
-        self.errorbar_rescaling = 'constant'
-        self.kernel = 'white_noise'
+        self.errorbar_rescaling = errorbar_rescaling
+        self.kernel = kernel 
+
+        # Define bounded normal prior distributions which are often needed
+        self.BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
+        self.BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+
+        # Initialize noise model
+        self._compute_varF()
+        if (kernel=='white_noise'):
+            pass
+        elif (kernel=='matern32'):
+            self._init_matern32_noise_model()
+        else:
+            raise ValueError('Kernel not recognized.')
+
     
     def construct_masked_tensor(self, array_list):
         """
@@ -89,7 +118,7 @@ class SingleLensModel(pm.Model):
 
         return tensor, mask
 
-    def magnification(self, t):
+    def magnification(self, t, u0):
         """
         Calculates the PSPL magnification fraction [A(u) - 1]/[A(u0) - 1]
         where A(u) is the analytic PSPL magnification.
@@ -118,14 +147,20 @@ class SingleLensModel(pm.Model):
 
         return guess
 
-    def compute_varF(self, errorbar_rescaling='constant'):
-        if (errorbar_rescaling=='constant'):
-            # Define custom prior distributions 
-            BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-            BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+    def _compute_varF(self):
+        """
+        Computes the modeled variance (squared "error-bars") of the observed 
+        fluxes. The user can can choose between three different options. The
+        first is a rescaling all error bars by a constant factor A. The second
+        is to is same as the first but with an additional additive variance 
+        term. The third option is the same as the second but with the additive
+        variance term is proportional to the magnification, reaching a maximum
+        value at highest magnification and it vanishes otherwise.
 
+        """
+        if (self.errorbar_rescaling=='constant'):
             ## Noise model parameters
-            self.A = BoundedNormal1('A', 
+            self.A = self.BoundedNormal1('A', 
                 mu=T.ones((self.n_bands, 1)),
                 sd=2.*T.ones((self.n_bands, 1)),
                 testval=1.5*T.ones((self.n_bands, 1)),
@@ -140,17 +175,17 @@ class SingleLensModel(pm.Model):
                     shape=(self.n_bands, 1)).logp(self.A))
             
             # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) 
+            self.varF = (self.A*self.sigF)**2
 
-        if (errorbar_rescaling=='additive_variance'):
+        elif (self.errorbar_rescaling=='additive_variance'):
             ## Noise model parameters
-            self.A = BoundedNormal1('A', 
+            self.A = self.BoundedNormal1('A', 
                 mu=T.ones((self.n_bands, 1)),
                 sd=2.*T.ones((self.n_bands, 1)),
                 testval=1.5*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1))
 
-            self.B = BoundedNormal('B', 
+            self.B = self.BoundedNormal('B', 
                 mu=T.zeros((self.n_bands, 1)), 
                 sd=1*T.ones((self.n_bands, 1)),
                 testval=0.01*T.ones((self.n_bands, 1)),
@@ -169,17 +204,17 @@ class SingleLensModel(pm.Model):
                     shape=(self.n_bands, 1)).logp(self.B))
 
             # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
+            self.varF = (self.A*self.sigF)**2 + self.B**2
 
-        if (errorbar_rescaling=='flux_dependant'):
+        elif (self.errorbar_rescaling=='flux_dependant'):
             ## Noise model parameters
-            self.A = BoundedNormal1('A', 
+            self.A = self.BoundedNormal1('A', 
                 mu=T.ones((self.n_bands, 1)),
                 sd=2.*T.ones((self.n_bands, 1)),
                 testval=1.5*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1))
 
-            self.B = BoundedNormal('B', 
+            self.B = self.BoundedNormal('B', 
                 mu=T.zeros((self.n_bands, 1)), 
                 sd=5*T.ones((self.n_bands, 1)),
                 testval=0.01*T.ones((self.n_bands, 1)),
@@ -198,9 +233,19 @@ class SingleLensModel(pm.Model):
                     shape=(self.n_bands, 1)).logp(self.B))
 
             # Diagonal terms of the covariance matrix
-            self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.magnification(self.t)*self.B, 2)
+            self.varF = (self.A*self.sigF)**2 +\
+                 (self.magnification(self.t)*self.B)**2
 
-    def init_matern32_noise_model(self):
+        else:
+            raise ValueError('Specified option for rescaling the flux error\
+                bars not recognized.')
+
+    def _init_matern32_noise_model(self):
+        """
+        Initializes all parameters for the matern32 Gaussian Process
+        noise model.
+
+        """
         def solve_for_invgamma_params(params, x_min, x_max):
             """
             Returns parameters of an inverse gamma distribution p(x) such that 
@@ -226,8 +271,8 @@ class SingleLensModel(pm.Model):
             invgamma_a[i], invgamma_b[i] = fsolve(solve_for_invgamma_params, 
                 (0.1, 0.1), (np.median(np.diff(t_)), t_[-1] - t_[0]))
 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-        self.sigma = BoundedNormal('sigma', 
+        self.BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
+        self.sigma = self.BoundedNormal('sigma', 
             mu=T.zeros((self.n_bands, 1)),
             sd=3.*T.ones((self.n_bands, 1)),
             testval=0.5*T.ones((self.n_bands, 1)),
@@ -242,7 +287,7 @@ class SingleLensModel(pm.Model):
         # Save log prior for each parameter, this is needed for hierarchical
         # modeling of multiple events using the importance resampling trick
         self.logp_sigma = pm.Deterministic('logp_sigma',
-            BoundedNormal.dist(
+            self.BoundedNormal.dist(
                 mu=T.zeros((self.n_bands, 1)),
                 sd=3.*T.ones((self.n_bands, 1)),
                 testval=0.5*T.ones((self.n_bands, 1)),
@@ -254,41 +299,30 @@ class SingleLensModel(pm.Model):
                 testval=0.5*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.rho))
 
-    def ll_single_band_matern32(self, band_idx):
-        t = self.t[band_idx][self.mask[band_idx].nonzero()]
-        r = self.r[band_idx][self.mask[band_idx].nonzero()]
-        varF = self.varF[band_idx][self.mask[band_idx].nonzero()]
-        
-        kernel = terms.Matern32Term(sigma=self.sigma, rho=self.rho)
-        # The exoplanet.gp.GP constructor takes an optional argument J which 
-        # specifies the width of the problem if it is known at compile time. 
-        # This is actually two times the J from the celerite paper
-        gp = GP(kernel, t, varF, J=2) # J=2 for Matern32 kernel
-
-        # Add a custom "potential" (log probability function) with the 
-        # GP likelihood
-        return gp.log_likelihood(r)
-
-    def ll_single_band_gaussian(self, band_idx):
-        """
-        Implements a white noise Gaussian likelihood function, assuming
-        that the observations in each photometric band are independent. 
-        """
-        r = self.r[band_idx][self.mask[band_idx].nonzero()]
-        varF = self.varF[band_idx][self.mask[band_idx].nonzero()]
-
-        # Gaussian likelihood
-        ll = -0.5*T.sum(T.pow(r, 2.)/varF) -\
-                0.5*T.sum(T.log(2*np.pi*varF))
-
-        return ll
-
     def log_likelihood(self):
-        # Compute the log-likelihood which is additive across different bands
+        """"
+        Computes the total log likelihood of the model assuming that the 
+        observations in different bands are independent. The choice of 
+        the likelihood function is specified when initializing the model.
+        """
         ll = 0 
+        # Iterate over all observed bands
         for i in range(self.n_bands):
-#            ll += self.ll_single_band_gaussian(i)
-            ll += self.ll_single_band_matern32(i)
+            t = self.t[i][self.mask[i].nonzero()]
+            r = self.r[i][self.mask[i].nonzero()]
+            varF = self.varF[i][self.mask[i].nonzero()]
+
+            if (self.kernel=='white_noise'):
+                ll += -0.5*T.sum(r**2/varF) -\
+                    0.5*T.sum(T.log(2*np.pi*varF))
+
+            elif (self.kernel=='matern32'):
+                kernel = terms.Matern32Term(sigma=self.sigma, rho=self.rho)
+                gp = GP(kernel, t, varF, J=2) # J=2 for matern32 kernel
+                ll += gp.log_likelihood(r)
+            
+            else:
+                raise ValueError('Kernel choice not recognized.')
 
         pm.Potential('log_likelihood', ll)
     
@@ -316,7 +350,7 @@ class SingleLensModel(pm.Model):
             a model prediction in a different band.
         """
         n_max =  np.max([len(t_grid) for t_grid in t_grids])
-        predictions = np.zeros((n_samples, self.n_bands, n_max))
+        prediction_eval = np.zeros((n_samples, self.n_bands, n_max))
 
         # Construct tensors needed to evaluate the model
         t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
@@ -324,20 +358,45 @@ class SingleLensModel(pm.Model):
         # Evaluate model for each sample
         for i, sample in enumerate(xo.get_samples_from_trace(trace, 
                 size=n_samples)):
-            # Tensor which is to be evaluated in model context
-            pred_mean = self.Delta_F*self.magnification(t_grids_tensor) +\
-                    self.F_base
             
-            predictions[i] = xo.eval_in_model(pred_mean, sample)
+            if (self.kernel=='white_noise'):
+                # Tensor which is to be evaluated in model context
+                prediction = self.Delta_F*self.magnification(t_grids_tensor) +\
+                    self.F_base
 
-        # Construct list of predictions
+                prediction_eval[i] = xo.eval_in_model(prediction, sample)
+
+            elif (self.kernel=='matern32'):
+                # Tensor which is to be evaluated in model context
+                prediction_mean = self.Delta_F*self.magnification(t_grids_tensor) +\
+                    self.F_base
+                prediction_mean_obs = self.Delta_F*self.magnification(self.t) +\
+                    self.F_base
+
+                for n in range(self.n_bands):
+                    # Initialize kernel and gp object
+                    kernel = terms.Matern32Term(sigma=self.sigma[n], 
+                        rho=self.rho[n])
+
+                    gp = GP(kernel, self.t[n], self.varF[n], J=2)
+
+                    # Calculate log_likelihood 
+                    r = self.F[n] - prediction_mean_obs[n]
+                    gp.log_likelihood(r)
+
+                    prediction_eval[i, n] =\
+                        xo.eval_in_model(gp.predict(t_grids[n]), sample) 
+
+                # Add mean model to GP prediction
+                prediction_eval[i] += xo.eval_in_model(prediction_mean, sample)
+
+        # Construct list of prediction_eval
         mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[:, i, ~mask_numpy])
+            pred_list.append(prediction_eval[:, i, ~mask_numpy])
 
         return pred_list
-
 
     def evaluate_prior_model_on_grid(self, trace, t_grids):
         """
@@ -363,29 +422,54 @@ class SingleLensModel(pm.Model):
         """
         n_samples = len(np.atleast_1d(trace['t0']))
         n_max =  np.max([len(t_grid) for t_grid in t_grids])
-        predictions = np.zeros((n_samples, self.n_bands, n_max))
+        prediction_eval = np.zeros((n_samples, self.n_bands, n_max))
 
         # Construct tensors needed to evaluate the model
         t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
 
         # Evaluate  model for each sample
         for i in range(n_samples):
-            # Tensor which is to be evaluated in model context
-            pred_mean = self.Delta_F*self.magnification(t_grids_tensor) +\
-                    self.F_base
-
             if (n_samples==1):
                 sample = {key:trace[key] for key in trace.keys()}
             else:
                 sample = {key:trace[key][i] for key in trace.keys()}
             
-            predictions[i] = xo.eval_in_model(pred_mean, sample)
+            if (self.kernel=='white_noise'):
+                # Tensor which is to be evaluated in model context
+                prediction = self.Delta_F*self.magnification(t_grids_tensor) +\
+                    self.F_base
 
-        # Construct list of predictions
+                prediction_eval[i] = xo.eval_in_model(prediction, sample)
+
+            elif (self.kernel=='matern32'):
+                # Tensor which is to be evaluated in model context
+                prediction_mean = self.Delta_F*self.magnification(t_grids_tensor) +\
+                    self.F_base
+                prediction_mean_obs = self.Delta_F*self.magnification(self.t) +\
+                    self.F_base
+
+                for n in range(self.n_bands):
+                    # Initialize kernel and gp object
+                    kernel = terms.Matern32Term(sigma=self.sigma[n], 
+                        rho=self.rho[n])
+
+                    gp = GP(kernel, self.t[n], self.varF[n], J=2)
+
+                    # Calculate log_likelihood 
+                    r = self.F[n] - prediction_mean_obs[n]
+                    gp.log_likelihood(r)
+
+                    prediction_eval[i, n] =\
+                        xo.eval_in_model(gp.predict(t_grids[n]), sample) 
+
+                # Add mean model to GP prediction
+                prediction_eval[i] += xo.eval_in_model(prediction_mean, sample)
+
+        # Construct list of prediction_eval
         mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[:, i, ~mask_numpy])
+            pred_list.append(prediction_eval[:, i, ~mask_numpy])
 
         return pred_list
 
@@ -410,22 +494,51 @@ class SingleLensModel(pm.Model):
             a model MAP prediction in a different band.
         """
         n_max =  np.max([len(t_grid) for t_grid in t_grids])
-        predictions = np.zeros((self.n_bands, n_max))
+        prediction_eval = np.zeros((self.n_bands, n_max))
 
         # Construct tensors needed to evaluate the model
         t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
 
-        # Tensor which is to be evaluated in model context
-        pred_mean = self.Delta_F*self.magnification(t_grids_tensor) +\
-                    self.F_base
-            
-        predictions = xo.eval_in_model(pred_mean, map_point)
+        if (self.kernel=='white_noise'):
+            # Tensor which is to be evaluated in model context
+            prediction = self.Delta_F*self.magnification(t_grids_tensor) +\
+                self.F_base
 
-        # Construct list of predictions
+            prediction_eval = xo.eval_in_model(prediction, map_point)
+
+        elif (self.kernel=='matern32'):
+            # Tensor which is to be evaluated in model context
+            prediction_mean = self.Delta_F*self.magnification(t_grids_tensor) +\
+                self.F_base
+            prediction_mean_obs = self.Delta_F*self.magnification(self.t) +\
+                self.F_base
+
+            for n in range(self.n_bands):
+                # Initialize kernel and gp object
+                kernel = terms.Matern32Term(sigma=self.sigma[n], 
+                    rho=self.rho[n])
+
+                gp = GP(kernel, self.t[n], self.varF[n], J=2)
+
+                # Calculate log_likelihood 
+                r = self.F[n] - prediction_mean_obs[n]
+                gp.log_likelihood(r)
+
+                print(type(gp.predict(t_grids[n])))
+                print(np.shape(t_grids[n]))
+                T.printing.Print('TEST')(gp.predict(t_grids[n]))
+
+                prediction_eval[n] =\
+                    xo.eval_in_model(gp.predict(t_grids[n]), map_point) 
+
+            # Add mean model to GP prediction
+            prediction_eval += xo.eval_in_model(prediction_mean, map_point)
+
+        # Construct list of prediction_eval
         mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[i, ~mask_numpy])
+            pred_list.append(prediction_eval[i, ~mask_numpy])
 
         return pred_list
 
@@ -496,23 +609,17 @@ class SingleLensModel(pm.Model):
 #        _ = pm.traceplot(trace)
 #        plt.savefig(output_dir + '/traceplots.png')
 
-        # Save autocorrelation plots for the chains
-        pm.plots.autocorrplot(trace)
-        plt.savefig(output_dir + '/autocorr.png')
-
         return trace
 
 class OutlierRemovalModel(SingleLensModel):
     #  override __init__ function from pymc3 Model class
     def __init__(self, data):
-        super(OutlierRemovalModel, self).__init__(data)
-
-        # Define custom prior distributions 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+        super(OutlierRemovalModel, self).__init__(data, 
+            errorbar_rescaling='additive_variance', 
+            kernel='matern32')
 
         # Initialize linear parameters
-        self.Delta_F = BoundedNormal('Delta_F', 
+        self.Delta_F = self.BoundedNormal('Delta_F', 
             mu=T.zeros((self.n_bands, 1)),
             sd=T.max(self.F)*T.ones((self.n_bands, 1)),
             testval=T.max(self.F)*T.ones((self.n_bands, 1)),
@@ -530,64 +637,19 @@ class OutlierRemovalModel(SingleLensModel):
         self.t0 = pm.Uniform('t0', T.min(self.t[0][self.mask[0].nonzero()]), 
             T.max(self.t[0][self.mask[0].nonzero()]), 
             testval=self.t0_guess(data))
-        self.u0 = BoundedNormal('u0', mu=0., sd=1.5, testval=0.05)
-        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=10.)
+        self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.05)
+        self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=10.)
         
         # Deterministic transformations
         self.tE = pm.Deterministic("tE", self.teff/self.u0) 
-
-        ## Noise model parameters
-        self.A = BoundedNormal1('A', 
-            mu=T.ones((self.n_bands, 1)),
-            sd=2.*T.ones((self.n_bands, 1)),
-            testval=1.5*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        self.B = BoundedNormal('B', 
-            mu=T.zeros((self.n_bands, 1)), 
-            sd=1*T.ones((self.n_bands, 1)),
-            testval=0.01*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        ## Compute parameters for the prior on GP hyperparameters
-        tables = data.get_standardized_data()
-        invgamma_a = np.zeros(self.n_bands)
-        invgamma_b = np.zeros(self.n_bands)
-
-        for i in range(len(tables)):
-            t = np.array(tables[i]['HJD'])
-            invgamma_a[i], invgamma_b[i] = fsolve(self.solve_for_invgamma_params, 
-                (0.1, 0.1), (np.median(np.diff(t)), t[-1] - t[0]))
-
-        self.sigma = BoundedNormal('sigma', 
-            mu=T.zeros((self.n_bands, 1)),
-            sd=3.*T.ones((self.n_bands, 1)),
-            testval=0.5*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        self.rho = pm.InverseGamma('rho', 
-            alpha = T._shared(invgamma_a)*T.ones((self.n_bands, 1)),
-            beta = T._shared(invgamma_b)*T.ones((self.n_bands, 1)),
-            testval=2.*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-        
-        # Compute the likelihood function
+       
+        # Compute the mean model and the residuals
         mag = self.magnification(self.t) 
-        mean_func = self.Delta_F*mag +  self.F_base # mean function
-
-        # Residuals
+        mean_func = self.Delta_F*mag +  self.F_base 
         self.r = self.F - mean_func
 
-        # Diagonal terms of the covariance matrix
-        self.varF = T.pow(self.A*self.sigF, 2) + T.pow(self.B, 2)
-
-        # Compute the log-likelihood which is additive across different bands
-        ll = 0 
-        for i in range(self.n_bands):
-            ll += self.log_likelihood_single_band(self.t[i], self.r[i], 
-                self.varF[i], self.sigma[i], self.rho[i], self.mask[i])
-
-        pm.Potential('log_likelihood', ll)
+        # Compute log_likelihood
+        self.log_likelihood()
 
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
@@ -598,78 +660,19 @@ class OutlierRemovalModel(SingleLensModel):
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
 
         return (A(u) - 1)/(A(self.u0) - 1) 
-    
-    def solve_for_invgamma_params(self, params, x_min, x_max):
-        """
-        Returns parameters of an inverse gamma distribution p(x) such that 
-        0.1% of total prob. mass is assigned to values of x < x_min and 
-        1% of total prob. masss  to values greater than x_max.
-        """
-
-        lower_mass = 0.01
-        upper_mass = 0.99
-
-        # Trial parameters
-        alpha, beta = params
-
-        # Equation for the roots defining params which satisfy the constraint
-        return (invgamma.cdf(x_min, alpha, scale=beta) - \
-            lower_mass, invgamma.cdf(x_max, alpha, scale=beta) - upper_mass)
-
-    def log_likelihood_single_band(self, t, r, varF, sigma, rho, mask):
-        # Calculate likelihood
-        kernel = terms.Matern32Term(sigma=sigma, rho=rho)
-        # The exoplanet.gp.GP constructor takes an optional argument J which 
-        # specifies the width of the problem if it is known at compile time. 
-        # This is actually two times the J from the celerite paper
-        gp = GP(kernel, t[mask.nonzero()], varF[mask.nonzero()], J=2) # J=2 for Matern32 kernel
-
-        # Add a custom "potential" (log probability function) with the 
-        # GP likelihood
-        return gp.log_likelihood(r[mask.nonzero()])
-   
-    def evaluate_map_model_on_grid(self, t_grids, map_point):
-        predictions = [np.zeros(T.shape(t_grid).eval()) for t_grid in t_grids]
-
-        for n in range(self.n_bands):
-            # Evaluate mean function at observed times
-            mag_obs = self.magnification(self.t[n][self.mask[n].nonzero()])
-            mean_func_obs = self.Delta_F[n]*mag_obs + self.F_base[n]
-
-            # Evaluate mean function on fine grid
-            mag = self.magnification(t_grids[n]) 
-            mean_func = self.Delta_F[n]*mag + self.F_base[n]
-            
-            # Diagonal terms of the covariance matrix
-            varF = T.pow(self.A[n]*self.sigF[n][self.mask[n].nonzero()], 2) +\
-                    T.pow(self.B[n], 2)
-
-            # Initialize kernel and gp object
-            kernel = terms.Matern32Term(sigma=self.sigma[n], 
-                rho=self.rho[n])
-            gp = GP(kernel, self.t[n][self.mask[n].nonzero()], varF, J=2)
-
-            # Calculate log_likelihood 
-            r = self.F[n][self.mask[n].nonzero()] - mean_func_obs
-            gp.log_likelihood(r)
-
-            # Evaluate tensors in model context
-            predictions[n] =\
-                xo.eval_in_model(gp.predict(t_grids[n]), map_point) +\
-                xo.eval_in_model(mean_func, map_point) 
-        
-        return predictions 
 
 class PointSourcePointLens(SingleLensModel):
-    def __init__(self, data, errorbar_rescaling='constant'):
-        super(PointSourcePointLens, self).__init__(data)
-
-        # Define custom prior distributions 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
+    """
+    Standard Point Source Point Lens model. 
+    
+    """
+    def __init__(self, data, errorbar_rescaling='constant', 
+            kernel='white_noise'):
+        super(PointSourcePointLens, self).__init__(data, errorbar_rescaling, 
+            kernel)
+        
         # Initialize linear parameters
-        self.Delta_F = BoundedNormal('Delta_F', 
+        self.Delta_F = self.BoundedNormal('Delta_F', 
             mu=T.zeros((self.n_bands, 1)),
             sd=50.*T.ones((self.n_bands, 1)),
             testval=5.*T.ones((self.n_bands, 1)),
@@ -687,15 +690,15 @@ class PointSourcePointLens(SingleLensModel):
         self.t0 = pm.Uniform('t0', T.min(self.t[0][self.mask[0].nonzero()]), 
             T.max(self.t[0][self.mask[0].nonzero()]), 
             testval=self.t0_guess(data))
-        self.u0 = BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
-        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
+        self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
+        self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=20.)
         
         # Deterministic transformations
         self.tE = pm.Deterministic("tE", self.teff/self.u0) 
 
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            BoundedNormal.dist(
+            self.BoundedNormal.dist(
                 mu=T.zeros((self.n_bands, 1)),
                 sd=50.*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.Delta_F))
@@ -709,20 +712,16 @@ class PointSourcePointLens(SingleLensModel):
                 T.min(self.t[0][self.mask[0].nonzero()]), 
                 T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
-            BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
+            self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
-            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
+            self.BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
-        self.compute_varF()
-        
-        # Compute the likelihood function
+        # Compute the mean model and the residuals
         mag = self.magnification(self.t) 
-        mean_func = self.Delta_F*mag +  self.F_base # mean function
-
-        # Residuals
+        mean_func = self.Delta_F*mag +  self.F_base 
         self.r = self.F - mean_func
 
-        self.init_matern32_noise_model()
+        # Compute log_likelihood
         self.log_likelihood()
 
         # Define helpful class attributes
@@ -773,15 +772,21 @@ class PointSourcePointLens(SingleLensModel):
 #        return ll
 
 class FiniteSourcePointLens(SingleLensModel):
-    def __init__(self, data, errorbar_rescaling='constant'):
-        super(FiniteSourcePointLens, self).__init__(data)
+    """
+    Finite Source Point Lens model. Finite source effects are computed using
+    the approach described in http://adsabs.harvard.edu/abs/2004ApJ...603..139Y.
+    This approach relies on solving different kinds of elliptic integrals, 
+    the solutions for which are provided in an external table FSPL_table.npy.
+    This table is loaded once the model is initialized.
 
-        # Define custom prior distributions 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
+    """
+    def __init__(self, data, errorbar_rescaling='constant', 
+            kernel='white_noise'):
+        super(FiniteSourcePointLens, self).__init__(data, errorbar_rescaling, 
+            kernel)
 
         # Initialize linear parameters
-        self.Delta_F = BoundedNormal('Delta_F', 
+        self.Delta_F = self.BoundedNormal('Delta_F', 
             mu=T.zeros((self.n_bands, 1)),
             sd=50.*T.ones((self.n_bands, 1)),
             testval=5.*T.ones((self.n_bands, 1)),
@@ -799,15 +804,15 @@ class FiniteSourcePointLens(SingleLensModel):
         self.t0 = pm.Uniform('t0', T.min(self.t[0][self.mask[0].nonzero()]), 
             T.max(self.t[0][self.mask[0].nonzero()]), 
             testval=self.t0_guess(data))
-        self.u0 = BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
-        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
+        self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
+        self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=20.)
         
         # Deterministic transformations
         self.tE = pm.Deterministic("tE", self.teff/self.u0) 
 
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            BoundedNormal.dist(
+            self.BoundedNormal.dist(
                 mu=T.zeros((self.n_bands, 1)),
                 sd=50.*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.Delta_F))
@@ -821,9 +826,9 @@ class FiniteSourcePointLens(SingleLensModel):
                 T.min(self.t[0][self.mask[0].nonzero()]), 
                 T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
-            BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
+            self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
-            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
+            self.BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
         # Load FSPL table
         table = np.load('notebooks/FSPL_table.npy')
@@ -836,29 +841,28 @@ class FiniteSourcePointLens(SingleLensModel):
 #        self.B12_interp = xo.interp.RegularGridInterpolator(points, B12[:, None])
 
         # Specify finite source parameters
-        self.rho_star = BoundedNormal('rho_star', mu=0., sd=1., testval=0.01)
-        self.gamma_lambda = BoundedNormal('gamma_lambda', 
+        self.rho_star = self.BoundedNormal('rho_star', mu=0., sd=0.2, testval=0.01)
+        self.gamma_lambda = self.BoundedNormal('gamma_lambda', 
             mu=T.zeros((self.n_bands, 1)),
             sd=1.*T.ones((self.n_bands, 1)),
             testval=0.5*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
-        # Compute the likelihood function
-        mag = self.magnification(self.t) 
-        mean_func = self.Delta_F*mag +  self.F_base # mean function
+        self.rho_star = pm.Deterministic('logp_rho_star', 
+            self.BoundedNormal.dist(mu=0., sd=0.2).logp(self.rho_star))
+        self.gamma_lambda = pm.Deterministic('logp_gamma_lambda', 
+            self.BoundedNormal.dist(
+                mu=T.zeros((self.n_bands, 1)),
+                sd=T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1)).logp(self.gamma_lambda))
 
-        # Residuals
+        # Compute the mean function and the residuals
+        mag = self.magnification(self.t) 
+        mean_func = self.Delta_F*mag +  self.F_base 
         self.r = self.F - mean_func
 
-        self.compute_varF()
-
-        # Compute the log-likelihood which is additive across different bands
-        ll = 0 
-        for i in range(self.n_bands):
-            ll += self.log_likelihood_single_band(self.r[i], 
-                self.varF[i], mag[i], self.mask[i])
-
-        pm.Potential('log_likelihood', ll)
+        # Compute the log_likelihood
+        self.log_likelihood()
 
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
@@ -874,20 +878,11 @@ class FiniteSourcePointLens(SingleLensModel):
 
         return (A(u, z) - 1)/(A(self.u0, z) - 1) 
 
-    def log_likelihood_single_band(self, r, varF, mag, mask):
-        """
-        Implements a white noise Gaussian likelihood function, assuming
-        that the observations in each photometric band are independent. 
-        """
-        # Gaussian likelihood
-        ll = -0.5*T.sum(T.pow(r[mask.nonzero()], 2.)/varF[mask.nonzero()]) -\
-                0.5*T.sum(T.log(2*np.pi*varF[mask.nonzero()]))
-
-        return ll
-
 class PointSourcePointLensAnnualParallax(SingleLensModel):
-    def __init__(self, data, errorbar_rescaling='constant'):
-        super(PointSourcePointLensAnnualParallax, self).__init__(data)
+    def __init__(self, data, errorbar_rescaling='constant', 
+            kernel='white_noise'):
+        super(PointSourcePointLensAnnualParallax, self).__init__(data,
+            errorbar_rescaling, kernel)
 
         # Load orbital data from JPL Horizons
         start = Time(data.tables[0]['HJD'][0], format='jd')
@@ -965,12 +960,9 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         self.a_par = pm.Normal('a_par', mu=0, sd=0.1, testval=0.01)
         self.a_vert = pm.Normal('a_vert', mu=0, sd=0.1, testval=0.01)
 
-        # Define custom prior distributions 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
 
         # Initialize linear parameters
-        self.Delta_F = BoundedNormal('Delta_F', 
+        self.Delta_F = self.BoundedNormal('Delta_F', 
             mu=T.zeros((self.n_bands, 1)),
             sd=50.*T.ones((self.n_bands, 1)),
             testval=5.*T.ones((self.n_bands, 1)),
@@ -989,12 +981,12 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             T.max(self.t[0][self.mask[0].nonzero()]), 
             testval=self.t0_guess(data))
         self.u0_prime = pm.Normal('u0_prime', mu=0., sd=1., testval=0.05)
-        self.omega_E_prime = BoundedNormal('omega_E_prime', mu=0., sd=0.5, 
+        self.omega_E_prime = self.BoundedNormal('omega_E_prime', mu=0., sd=0.5, 
             testval=0.05)
         
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            BoundedNormal.dist(
+            self.BoundedNormal.dist(
                 mu=T.zeros((self.n_bands, 1)),
                 sd=50.*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.Delta_F))
@@ -1008,32 +1000,28 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
                 T.min(self.t[0][self.mask[0].nonzero()]), 
                 T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0_prime))
 #        self.logp_u0 = pm.Deterministic('logp_u0', 
-#            BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0_prime))
+#            self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0_prime))
 #        self.logp_teff = pm.Deterministic('logp_teff', 
-#            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
+#            self.BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
-        # Compute the likelihood function
+        # Compute the mean function and the residuals
         self.t_E = 0.
         self.pi_E = 0.
         mag = self.magnification(self.t, gamma_w, gamma_n) 
-        mean_func = self.Delta_F*mag +  self.F_base # mean function
+        mean_func = self.Delta_F*mag +  self.F_base 
+        self.r = self.F - mean_func
 
         # Save t_E, and pi_E parameters to trace
         pm.Deterministic('t_E', self.t_E)
         pm.Deterministic('pi_E', self.pi_E)
 
-        # Residuals
-        self.r = self.F - mean_func
+        # Compute the log_likelihood
+        self.log_likelihood()
 
-        self.compute_varF()
+        # Define helpful class attributes
+        self.free_parameters = [RV.name for RV in self.basic_RVs]
+        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
 
-        # Compute the log-likelihood which is additive across different bands
-        ll = 0 
-        for i in range(self.n_bands):
-            ll += self.log_likelihood_single_band(self.r[i], 
-                self.varF[i], mag[i], self.mask[i])
-
-        pm.Potential('log_likelihood', ll)
 
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
@@ -1087,20 +1075,9 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
 
         return (A(u) - 1)/(A(self.u0_prime) - 1) 
     
-    def log_likelihood_single_band(self, r, varF, mag, mask):
-        """
-        Implements a white noise Gaussian likelihood function, assuming
-        that the observations in each photometric band are independent. 
-        """
-        # Gaussian likelihood
-        ll = -0.5*T.sum(T.pow(r[mask.nonzero()], 2.)/varF[mask.nonzero()]) -\
-                0.5*T.sum(T.log(2*np.pi*varF[mask.nonzero()]))
-
-        return ll
-        
     def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
         n_max =  np.max([len(t_grid) for t_grid in t_grids])
-        predictions = np.zeros((n_samples, self.n_bands, n_max))
+        prediction_eval = np.zeros((n_samples, self.n_bands, n_max))
 
         # Construct tensors needed to evaluate the model 
         t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
@@ -1117,23 +1094,23 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         for i, sample in enumerate(xo.get_samples_from_trace(trace, 
                 size=n_samples)):
             # Tensor which is to be evaluated in model context
-            pred_mean = self.Delta_F*self.magnification(t_grids_tensor, 
+            prediction = self.Delta_F*self.magnification(t_grids_tensor, 
                 gamma_w, gamma_n) + self.F_base
 
-            predictions[i] = xo.eval_in_model(pred_mean, sample)
+            prediction_eval[i] = xo.eval_in_model(prediction, sample)
 
-        # Construct list of predictions
+        # Construct list of prediction_eval
         mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[:, i, ~mask_numpy])
+            pred_list.append(prediction_eval[:, i, ~mask_numpy])
 
         return pred_list
 
     def evaluate_prior_model_on_grid(self, trace, t_grids):
         n_samples = len(np.atleast_1d(trace['t0_prime']))
         n_max =  np.max([len(t_grid) for t_grid in t_grids])
-        predictions = np.zeros((n_samples, self.n_bands, n_max))
+        prediction_eval = np.zeros((n_samples, self.n_bands, n_max))
 
         # Construct tensors needed to evaluate the model 
         t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
@@ -1149,7 +1126,7 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         # Evaluate model for each sample
         for i in range(n_samples):
             # Tensor which is to be evaluated in model context
-            pred_mean = self.Delta_F*self.magnification(t_grids_tensor, 
+            prediction = self.Delta_F*self.magnification(t_grids_tensor, 
                 gamma_w, gamma_n) + self.F_base
 
             if (n_samples==1):
@@ -1157,19 +1134,19 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             else:
                 sample = {key:trace[key][i] for key in trace.keys()}
 
-            predictions[i] = xo.eval_in_model(pred_mean, sample)
+            prediction_eval[i] = xo.eval_in_model(prediction, sample)
 
-        # Construct list of predictions
+        # Construct list of prediction_eval
         mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[:, i, ~mask_numpy])
+            pred_list.append(prediction_eval[:, i, ~mask_numpy])
 
         return pred_list
 
     def evaluate_map_model_on_grid(self, t_grids, map_point):
         n_max =  np.max([len(t_grid) for t_grid in t_grids])
-        predictions = np.zeros((self.n_bands, n_max))
+        prediction_eval = np.zeros((self.n_bands, n_max))
 
         # Construct tensors needed to evaluate the model
         t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
@@ -1184,16 +1161,16 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
 
  
         # Tensor which is to be evaluated in model context
-        pred_mean = self.Delta_F*self.magnification(t_grids_tensor, gamma_w,
+        prediction = self.Delta_F*self.magnification(t_grids_tensor, gamma_w,
             gamma_n) + self.F_base
             
-        predictions = xo.eval_in_model(pred_mean, map_point)
+        prediction_eval = xo.eval_in_model(prediction, map_point)
 
-        # Construct list of predictions
+        # Construct list of prediction_eval
         mask_numpy  = mask.nonzero()[0].eval().astype(bool)
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(predictions[i, ~mask_numpy])
+            pred_list.append(prediction_eval[i, ~mask_numpy])
 
         return pred_list
 
@@ -1219,240 +1196,18 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         
         return {'l':l, 'b':b}
 
-class PointSourcePointLensMatern32(SingleLensModel):
-    def __init__(self, data, errorbar_rescaling='constant'):
-        super(PointSourcePointLensMatern32, self).__init__(data)
-
-        # Define custom prior distributions 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
-        # Initialize linear parameters
-        self.Delta_F = BoundedNormal('Delta_F', 
-            mu=T.zeros((self.n_bands, 1)),
-            sd=50.*T.ones((self.n_bands, 1)),
-            testval=5.*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        self.F_base = pm.Normal('F_base', 
-            mu=T.zeros((self.n_bands, 1)), 
-            sd=0.6*T.ones((self.n_bands, 1)),
-            testval=T.zeros((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        # Initialize non-linear parameters
-        ## Posterior is multi-modal in t0 and it's critical that the it is 
-        ## initialized near the true value
-        self.t0 = pm.Uniform('t0', T.min(self.t[0][self.mask[0].nonzero()]), 
-            T.max(self.t[0][self.mask[0].nonzero()]), 
-            testval=self.t0_guess(data))
-        self.u0 = BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
-        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
-        
-        # Deterministic transformations
-        self.tE = pm.Deterministic("tE", self.teff/self.u0) 
-
-        ## Save log prior for each parameter for hierarhical modeling 
-        self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            BoundedNormal.dist(
-                mu=T.zeros((self.n_bands, 1)),
-                sd=50.*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.Delta_F))
-        self.logp_F_base = pm.Deterministic('logp_F_base',
-            pm.Normal.dist(
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=0.6*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.F_base))
-        self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(
-                T.min(self.t[0][self.mask[0].nonzero()]), 
-                T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
-        self.logp_u0 = pm.Deterministic('logp_u0', 
-            BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
-        self.logp_teff = pm.Deterministic('logp_teff', 
-            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
-
-        # Compute the likelihood function
-        mag = self.magnification(self.t) 
-        mean_func = self.Delta_F*mag +  self.F_base # mean function
-
-        # Residuals
-        self.r = self.F - mean_func
-
-        self.compute_varF()
-
-        ## Compute parameters for the prior on GP hyperparameters
-        tables = data.get_standardized_data()
-        invgamma_a = np.zeros(self.n_bands)
-        invgamma_b = np.zeros(self.n_bands)
-
-        for i in range(len(tables)):
-            t = np.array(tables[i]['HJD'])
-            invgamma_a[i], invgamma_b[i] = fsolve(self.solve_for_invgamma_params, 
-                (0.1, 0.1), (np.median(np.diff(t)), t[-1] - t[0]))
-
-        self.sigma = BoundedNormal('sigma', 
-            mu=T.zeros((self.n_bands, 1)),
-            sd=3.*T.ones((self.n_bands, 1)),
-            testval=0.5*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        self.rho = pm.InverseGamma('rho', 
-            alpha = T._shared(invgamma_a)*T.ones((self.n_bands, 1)),
-            beta = T._shared(invgamma_b)*T.ones((self.n_bands, 1)),
-            testval=2.*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        # Save log prior for each parameter, this is needed for hierarchical
-        # modeling of multiple events using the importance resampling trick
-        self.logp_sigma = pm.Deterministic('logp_sigma',
-            BoundedNormal.dist(
-                mu=T.zeros((self.n_bands, 1)),
-                sd=3.*T.ones((self.n_bands, 1)),
-                testval=0.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.sigma))
-        self.logp_rho = pm.Deterministic('logp_rho',
-            pm.InverseGamma.dist(
-                alpha = T._shared(invgamma_a)*T.ones((self.n_bands, 1)),
-                beta = T._shared(invgamma_b)*T.ones((self.n_bands, 1)),
-                testval=0.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.rho))
-        
-        # Compute the log-likelihood which is additive across different bands
-        ll = 0 
-        for i in range(self.n_bands):
-            ll += self.log_likelihood_single_band(self.t[i], self.r[i], 
-                self.varF[i], self.sigma[i], self.rho[i], self.mask[i])
-
-        pm.Potential('log_likelihood', ll)
-
-        # Define helpful class attributes
-        self.free_parameters = [RV.name for RV in self.basic_RVs]
-        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
-
-    def magnification(self, t):
-        u = T.sqrt(self.u0**2 + ((t - self.t0)/self.tE)**2)
-        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-
-        return (A(u) - 1)/(A(self.u0) - 1) 
-        
-    def solve_for_invgamma_params(self, params, x_min, x_max):
-        """
-        Returns parameters of an inverse gamma distribution p(x) such that 
-        0.1% of total prob. mass is assigned to values of x < x_min and 
-        1% of total prob. masss  to values greater than x_max.
-        """
-
-        def inverse_gamma_cdf(x, alpha, beta):
-            return invgamma.cdf(x, alpha, scale=beta)
-
-        lower_mass = 0.01
-        upper_mass = 0.99
-
-        # Trial parameters
-        alpha, beta = params
-
-        # Equation for the roots defining params which satisfy the constraint
-        return (inverse_gamma_cdf(x_min, alpha, beta) - \
-            lower_mass, inverse_gamma_cdf(x_max, alpha, beta) - upper_mass)
-
-    def log_likelihood_single_band(self, t, r, varF, sigma, rho, mask):
-        # Calculate likelihood
-        kernel = terms.Matern32Term(sigma=sigma, rho=rho)
-        # The exoplanet.gp.GP constructor takes an optional argument J which 
-        # specifies the width of the problem if it is known at compile time. 
-        # This is actually two times the J from the celerite paper
-        gp = GP(kernel, t[mask.nonzero()], varF[mask.nonzero()], J=2) # J=2 for Matern32 kernel
-
-        # Add a custom "potential" (log probability function) with the 
-        # GP likelihood
-        return gp.log_likelihood(r[mask.nonzero()])
-        
-    def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
-        predictions = [np.zeros((n_samples, 
-            int(T.shape(t_grid).eval()))) for t_grid in t_grids]
-
-        for n in range(self.n_bands):
-            # Evaluate model for each sample in the chain
-            for i, sample in enumerate(xo.get_samples_from_trace(trace, 
-                    size=n_samples)):
-                # Evaluate mean function at observed times
-                mag_obs = self.magnification(self.t[n][self.mask[n].nonzero()])
-                mean_func_obs = self.Delta_F[n]*mag_obs + self.F_base[n]
-
-                # Evaluate mean function on fine grid
-                mag = self.magnification(t_grids[n]) 
-                mean_func = self.Delta_F[n]*mag + self.F_base[n]
-                
-                # Diagonal terms of the covariance matrix
-                varF = T.pow(self.A[n]*self.sigF[n][self.mask[n].nonzero()], 2) 
-#                     T.pow(mag_obs*self.B[n], 2)
-
-                # Initialize kernel and gp object
-                kernel = terms.Matern32Term(sigma=self.sigma[n], 
-                    rho=self.rho[n])
-                gp = GP(kernel, self.t[n][self.mask[n].nonzero()], varF, J=2)
-
-                # Calculate log_likelihood 
-                r = self.F[n][self.mask[n].nonzero()] - mean_func_obs
-                gp.log_likelihood(r)
-
-                # Evaluate tensors in model context
-                predictions[n][i] =\
-                    xo.eval_in_model(gp.predict(t_grids[n]), sample) +\
-                    xo.eval_in_model(mean_func, sample) 
-            
-        return predictions 
-
-    def evaluate_map_model_on_grid(self, t_grids, map_point):
-        predictions = [np.zeros(int(T.shape(t_grid).eval())) for t_grid in t_grids]
-
-        for n in range(self.n_bands):
-            # Evaluate mean function at observed times
-            mag_obs = self.magnification(self.t[n][self.mask[n].nonzero()])
-            mean_func_obs = self.Delta_F[n]*mag_obs + self.F_base[n]
-
-            # Evaluate mean function on fine grid
-            mag = self.magnification(t_grids[n]) 
-            mean_func = self.Delta_F[n]*mag + self.F_base[n]
-            
-            # Diagonal terms of the covariance matrix
-            varF = T.pow(self.A[n]*self.sigF[n][self.mask[n].nonzero()], 2) +\
-                    T.pow(mag_obs*self.B[n], 2)
-
-            # Initialize kernel and gp object
-
-            kernel = terms.Matern32Term(sigma=self.sigma[n], 
-                rho=self.rho[n])
-            gp = GP(kernel, self.t[n][self.mask[n].nonzero()], varF, J=2)
-
-            # Calculate log_likelihood 
-            r = self.F[n][self.mask[n].nonzero()] - mean_func_obs
-            gp.log_likelihood(r)
-
-            # Evaluate tensors in model context
-            predictions[n] =\
-                xo.eval_in_model(gp.predict(t_grids[n]), map_point) +\
-                xo.eval_in_model(mean_func, map_point) 
-        
-        return predictions 
-
 class PointSourcePointLensMarginalized(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant'):
         super(PointSourcePointLensMarginalized, self).__init__(data)
-
-        # Define custom prior distributions 
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-        BoundedNormal1 = pm.Bound(pm.Normal, lower=1.) 
-
+        
         # Initialize non-linear parameters
         ## Posterior is multi-modal in t0 and it's critical that the it is 
         ## initialized near the true value
         self.t0 = pm.Uniform('t0', T.min(self.t[0][self.mask[0].nonzero()]), 
             T.max(self.t[0][self.mask[0].nonzero()]), 
             testval=self.t0_guess(data))
-        self.u0 = BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
-        self.teff = BoundedNormal('teff', mu=0., sd=365., testval=20.)
+        self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
+        self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=20.)
         
         # Deterministic transformations
         self.tE = pm.Deterministic("tE", self.teff/self.u0) 
@@ -1463,9 +1218,9 @@ class PointSourcePointLensMarginalized(SingleLensModel):
                 T.min(self.t[0][self.mask[0].nonzero()]), 
                 T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
-            BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
+            self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
-            BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
+            self.BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
         # Compute the likelihood function
         self.mag = self.magnification(self.t) 

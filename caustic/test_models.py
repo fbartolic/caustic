@@ -63,20 +63,18 @@ print("PyMC3 version", pm.__version__)
 #    errorbar_rescaling='additive_variance'), 100)
 #plt.show()
 
-with PointSourcePointLens(event, 
-    errorbar_rescaling='additive_variance') as model1:
+with PointSourcePointLens(event, kernel='white_noise') as model1:
     model1.sample(output_dir1, n_tune=2000, n_samples=2000)
-#with FiniteSourcePointLens(event, 
+    trace1 = pm.load_trace(output_dir1 + '/model.trace')
+#with FiniteSourcePointLens(event, kernel='white_noise',
 #    errorbar_rescaling='additive_variance') as model2:
 #    trace2 = model2.sample(output_dir2, n_tune=3000, n_samples=2000)
 #    trace2 = pm.load_trace(output_dir2 + '/model.trace')
 #with PointSourcePointLensAnnualParallax(event, 
 #    errorbar_rescaling='additive_variance') as model3:
-##    trace3 = model3.sample(output_dir3, n_tune=3000, n_samples=3000)
+###    trace3 = model3.sample(output_dir3, n_tune=3000, n_samples=3000)
 #    trace3 = pm.load_trace(output_dir3 + '/model.trace')
 
-fig, ax = plt.subplots()
-ax.hist(trace3['pi_E'])
 # Plot scatterplot of samples in acceleration space
 #fig, ax = plt.subplots()
 #ax.scatter(trace3['a_vert'], trace3['a_par'], color='black', marker='o', 
@@ -84,7 +82,7 @@ ax.hist(trace3['pi_E'])
 #ax.set_xlabel('a_vert')
 #ax.set_ylabel('a_par')
 #ax.grid()
-plt.show()
+#plt.show()
 #
 ## Plot corner plot of the samples
 #trace3_df = pm.trace_to_dataframe(trace3, include_transformed=True)
@@ -103,17 +101,26 @@ plt.show()
 #plt.show()
 
 # Plot model PSPL model
-fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
-            figsize=(25, 10), sharex=True)
-plot_model_and_residuals(ax, event, 
-            PointSourcePointLens(event, errorbar_rescaling='additive_variance'),
-            output_dir1 + '/model.trace', 100)
-plt.show()
-
-# Plot model parallax model
 #fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
 #            figsize=(25, 10), sharex=True)
 #plot_model_and_residuals(ax, event, 
-#            PointSourcePointLensAnnualParallax(event, errorbar_rescaling='additive_variance'),
-#            output_dir3 + '/model.trace', 100)
+#            PointSourcePointLens(event, kernel='Matern32'),
+#            output_dir1 + '/model.trace', 100)
 #plt.show()
+
+# Plot finite source model
+#fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+#            figsize=(25, 10), sharex=True)
+#plot_model_and_residuals(ax, event, 
+#            FiniteSourcePointLens(event),
+#            output_dir2 + '/model.trace', 100)
+#plt.show()
+
+# Plot model parallax model
+fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
+            figsize=(25, 10), sharex=True)
+plot_model_and_residuals(ax, event, 
+            PointSourcePointLensAnnualParallax(event, kernel='white_noise', 
+            errorbar_rescaling='additive_variance'),
+            output_dir3 + '/model.trace', 100)
+plt.show()

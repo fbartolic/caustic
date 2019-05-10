@@ -106,9 +106,9 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point):
     """
     # Load standardized data
     tables = event.get_standardized_data()
-    t_grids = [T._shared(np.linspace(table['HJD'][0], table['HJD'][-1], 5000))\
+    t_grids = [np.linspace(table['HJD'][0], table['HJD'][-1], 5000)\
         for table in tables]
-    t_observed = [T._shared(table['HJD']) for table in tables]
+    t_observed = [table['HJD'] for table in tables]
 
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
