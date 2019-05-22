@@ -895,12 +895,9 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
 
         # Calculate the projection of Eath-Sun position vector on the plane
         # of the sky
-        ## Transform equatorial event coordinates into ecliptic coordinates
-        event_ecl_coord = self.equatorial_to_ecliptic_coordinates(
-            data.coordinates, 
-            0.5*(data.tables[0]['HJD'][0] + data.tables[0]['HJD'][-1]))
-        lambda_0  = event_ecl_coord['l']
-        beta_0  = event_ecl_coord['b']
+        coordinates_ecliptic = data.coordinates.transform_to('geocentrictrueecliptic')
+        lambda_0  = coordinates_ecliptic.lon.value*(np.pi/180)
+        beta_0  = coordinates_ecliptic.lat.value*(np.pi/180)
 
         t = np.array(elements['datetime_jd']) # JD
         e = np.array(elements['e'])
@@ -1173,28 +1170,6 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             pred_list.append(prediction_eval[i, ~mask_numpy])
 
         return pred_list
-
-    def equatorial_to_ecliptic_coordinates(self, coordinates, obs_time):
-        # Earth's obliquity angle
-        T = (obs_time - 2451545)/365.25/100 # julian centuries since J2000
-        eps = 23.439279 - (46.815/60**2)*T
-        R = np.array([[1, 0, 0],
-                    [0, np.cos(eps), np.sin(eps)],
-                    [0, -np.sin(eps), np.cos(eps)]])
-        
-        ra = coordinates.ra.to(u.rad).value
-        dec = coordinates.dec.to(u.rad).value
-        coord_ec_cartesian = np.array([np.cos(ra)*np.cos(dec),
-                                    np.sin(ra)*np.cos(dec),
-                                    np.sin(dec)])
-        
-        # Transformation between equatorial and ecliptical coordinates
-        coord_eq_cartesian = R @ coord_ec_cartesian[:, np.newaxis]
-        
-        b = np.arcsin(coord_eq_cartesian[2])
-        l = 2*np.arctan(coord_eq_cartesian[1]/(np.cos(b) + coord_eq_cartesian[0]))
-        
-        return {'l':l, 'b':b}
 
 class PointSourcePointLensMarginalized(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant'):
