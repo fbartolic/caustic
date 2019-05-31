@@ -3,6 +3,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from io import StringIO
 import re
+import os
 from astropy.coordinates import SkyCoord
 from astropy import units as u 
 from astropy.table import Table
@@ -11,14 +12,14 @@ class Data(object):
     """
     Abstract base class for microlensing data from various observatories. 
     Subclasses should overload the :func:`Data.load_data`. The time series
-    data is stored as a list of Astropy tables, one for each photometric band.
+    data is stored as a list of Astropy tables, one for each photometric filter.
     """
     def __init__(self, event_dir=""):
         self.tables = []
         self.masks = []
         self.event_name = ""
         self.coordinates = None
-        self.units = 'magnitudes' # units have to be the same across all bands
+        self.units = 'magnitudes' # units have to be the same across all filters
 
     def __str__(self):
         print(self.tables)
@@ -122,6 +123,8 @@ class Data(object):
             log-normal distributed flux, and sig_F is the corresponding 
             square root variance.
         """
+        # Truncate errorbars greater than 1 mag for numerical stability reasons
+        sig_m[sig_m > 1] = 1
 
         # Calculate the mean and std. deviation for lnF which is assumed to be 
         # normally distributed 
@@ -170,9 +173,9 @@ class Data(object):
 
     def get_standardized_data(self):  
         """
-        This function standardizes the data, expressed in flux units, to zero 
-        median and unit variance, a format which is more suitable for 
-        subsequent modeling.
+        This returns data tables in a standardized format, expressed in 
+        flux units, rescaled to zero  median and unit variance, a format which 
+        is more suitable for subsequent modeling.
         """
         if not (self.units=='fluxes'):
             self.convert_data_to_fluxes()
@@ -191,6 +194,9 @@ class Data(object):
             table_std['HJD'] = table['HJD'][mask] - 2450000
             stanardized_data.append(table_std)
 
+        # Convert back to magnitudes
+        self.convert_data_to_magnitudes()
+
         return stanardized_data
 
     def plot(self, ax):
@@ -208,20 +214,22 @@ class Data(object):
 
                 # Plot data
                 ax.errorbar(table['HJD'][mask] - 2450000, table['flux'][mask], 
-                    table['flux_err'][mask], fmt='.', color='C' + str(i), 
-                    label=table.meta['band'], ecolor='C' + str(i))
+                    table['flux_err'][mask], fmt='o', color='C' + str(i), 
+                    label=table.meta['observatory'] + ' ' + table.meta['filter'], 
+                    ecolor='C' + str(i), alpha=0.5)
                 ax.set_ylabel('flux')
 
-                # Plot outliers
-                ax.errorbar(table['HJD'][~mask] - 2450000,
-                    table['flux'][~mask], 
-                    table['flux_err'][~mask], fmt='.', color='C' + str(i),
-                    ecolor='C' + str(i), alpha=0.15, label='outliers')
+#                # Plot outliers
+#                ax.errorbar(table['HJD'][~mask] - 2450000,
+#                    table['flux'][~mask], 
+#                    table['flux_err'][~mask], fmt='o', color='C' + str(i),
+#                    ecolor='C' + str(i), alpha=0.1, label='outliers')
         else:
             for i, table in enumerate(self.tables):
                 ax.errorbar(table['HJD'] - 2450000, table['mag'], 
-                    table['mag_err'], fmt='.', color='C' + str(i), 
-                    label=table.meta['band'], ecolor='C' + str(i))
+                    table['mag_err'], fmt='o', color='C' + str(i), 
+                    label=table.meta['observatory'] + ' ' + table.meta['filter'], 
+                    ecolor='C' + str(i), alpha=0.5)
                 ax.set_ylabel('mag')
                 ax.invert_yaxis()
 
@@ -243,8 +251,9 @@ class Data(object):
         # Plot masked data
         for i, table in enumerate(std_tables):
             ax.errorbar(table['HJD'], table['flux'], 
-                table['flux_err'], fmt='.', color='C' + str(i), 
-                label=table.meta['band'], ecolor='C' + str(i))
+                table['flux_err'], fmt='o', color='C' + str(i), 
+                label=table.meta['observatory'] + ' ' + table.meta['filter'], 
+                ecolor='C' + str(i), alpha=0.5)
 
         ax.grid(True)
         ax.set_title(self.event_name)
@@ -252,7 +261,7 @@ class Data(object):
         ax.set_ylabel('Flux (rescaled)')
         ax.legend(prop={'size': 16})
 
-    def remove_worst_outliers(self, window_size=7, mad_cutoff=5):
+    def remove_worst_outliers(self, window_size=11, mad_cutoff=5):
         if not (self.units=='fluxes'):
             self.convert_data_to_fluxes()
 
@@ -295,7 +304,7 @@ class OGLEData(Data):
         t = Table.read(event_dir + '/phot.dat', format='ascii', 
             names=('HJD', 'mag', 'mag_err', 'col4', 'col5'))
         t.keep_columns(('HJD', 'mag', 'mag_err'))
-        t.meta = {'band':'OGLE I', 'observatory':'OGLE'}
+        t.meta = {'filter':'I', 'observatory':'OGLE'}
         self.tables.append(t)
         self.masks = [np.ones(len(t['HJD']), dtype=bool)]
 
@@ -324,6 +333,7 @@ class MOAData(Data):
             
         key_value = index[index['code'].str.match(event_code)].iloc[0]
         self.event_name = 'MOA-' + key_value.iloc[0]
+        self.load_data(event_path)
 
     def load_data(self, event_path):
         """Returns dataframe with raw data."""
@@ -336,27 +346,15 @@ class MOAData(Data):
             t = Table.read(processed, format='ascii')
             t.keep_columns(['col1', 'col2', 'col3'])
             t.rename_column('col1', 'HJD')
-            t.rename_column('col2', 'mag')
-            t.rename_column('col3', 'mag_err')
-            t.meta = {'band':'MOA I', 'observatory':'MOA'}
+            t.rename_column('col2', 'flux')
+            t.rename_column('col3', 'flux_err')
+            t.meta = {'filter':'I', 'observatory':'MOA'}
 
             # Remove the random rows with zero time and negative time
             t = t[t['HJD'] > 0]
 
         self.tables.append(t)
-
-class LCOData(Data):
-    """Subclass of data class for dealing with ROME_REA data."""
-    def __init__(self, event_path):
-        super(LCOData, self).__init__(event_path)
-
-    def load_data(self, event_path):
-        """Returns dataframe with raw data."""
-        table = pd.read_csv(event_path, sep=' ',  usecols=(1, 13, 14), 
-            names=['HJD - 2450000', 'mag', 'mag_err'])
-
-        table['HJD - 2450000'] = table['HJD - 2450000'] - 2450000 
-        return table
+        self.masks = [np.ones(len(t['HJD']), dtype=bool)]
 
 class KMTData(Data):
     """Subclass of data class for dealing with OGLE data."""
@@ -373,7 +371,7 @@ class KMTData(Data):
         t1.rename_column('col1', 'HJD')
         t1.rename_column('col2', 'flux')
         t1.rename_column('col3', 'flux_err')
-        t1.meta = {'band':'KMTA_I', 'observatory':'KMTNet'}
+        t1.meta = {'filter':'I', 'observatory':'KMTA'}
 
         t2 = Table.read(event_dir + '/KMTC01_I.diapl', format='ascii')
         t2['col1'] += 2450000
@@ -381,7 +379,7 @@ class KMTData(Data):
         t2.rename_column('col1', 'HJD')
         t2.rename_column('col2', 'flux')
         t2.rename_column('col3', 'flux_err')
-        t2.meta = {'band':'KMTC_I', 'observatory':'KMTNet'}
+        t2.meta = {'filter':'I', 'observatory':'KMTC'}
 
         t3 = Table.read(event_dir + '/KMTS01_I.diapl', format='ascii')
         t3['col1'] += 2450000
@@ -389,9 +387,85 @@ class KMTData(Data):
         t3.rename_column('col1', 'HJD')
         t3.rename_column('col2', 'flux')
         t3.rename_column('col3', 'flux_err')
-        t3.meta = {'band':'KMTS_I', 'observatory':'KMTNet'}
+        t3.meta = {'filter':'I', 'observatory':'KMTS'}
 
         self.tables = [t1, t2, t3]
         self.masks = [np.ones(len(t1['HJD']), dtype=bool), 
             np.ones(len(t2['HJD']), dtype=bool),
             np.ones(len(t3['HJD']), dtype=bool)]
+
+class NASAExoArchiveData(Data):
+    """Subclass of data class for dealing with data from NASA Exo Archive."""
+    """Subclass of data class for dealing with OGLE data."""
+    def __init__(self, event_dir):
+        super(NASAExoArchiveData, self).__init__(event_dir)
+        self.load_data(event_dir)
+        self.units = 'magnitudes'
+
+    def load_data(self, event_dir):
+        """Returns tables with raw data."""
+        count = 0
+        for file in os.listdir(event_dir):
+            if file.endswith(".tbl"):
+                t = Table.read(os.path.join(event_dir, file), format='ascii')
+
+                if (t.colnames[0]=='JD'):                
+                    t.rename_column('JD', 'HJD')
+                elif (t.colnames[0]=='HJD'):
+                    pass
+                else:
+                    raise ValueError("No column named HJD or JD.")
+
+                if (t.colnames[1]=='Relative_Flux'):
+                    m, m_err = self.fluxes_to_magnitudes(t['Relative_Flux'],
+                        t['Relative_Flux_Uncertainty'])
+                    t['Relative_Flux'] = m
+                    t['Relative_Flux_Uncertainty'] = m_err
+                    t.rename_column('Relative_Flux', 'mag')
+                    t.rename_column('Relative_Flux_Uncertainty', 'mag_err')
+                    t.keep_columns(['HJD', 'mag', 'mag_err'])
+                elif (t.colnames[1]=='RELATIVE_MAGNITUDE'):
+                    t.rename_column('RELATIVE_MAGNITUDE', 'mag')
+                    t.rename_column('MAGNITUDE_UNCERTAINTY', 'mag_err')
+                    t.keep_columns(['HJD', 'mag', 'mag_err'])
+                else:
+                    raise ValueError("No columns specifying flux or magnitude.")
+                
+                info = t.meta['keywords']
+                
+                # Save coordinates of event, check they're consistent between datasets
+                if (count==0):
+                    ra = info['RA']['value']
+                    dec = info['DEC']['value']
+                    self.coordinates = SkyCoord(ra, dec)        
+                elif(ra!=info['RA']['value'] or\
+                         dec!=info['DEC']['value']):
+                    raise ValueError("Event coordinates don't match between\
+                         different datasets. ")
+
+                # Save event name
+                if (count==0):
+                    self.event_name = info['STAR_ID']['value']
+                elif (self.event_name!=info['STAR_ID']['value']):
+                    self.event_name += info['keywords']['STAR_ID']['value']
+                    
+                # Check that all times are HJD in epoch J2000.0    
+                if (info['EQUINOX']['value']!="J2000.0"):
+                    raise ValueError("Equinox for the dataset ", 
+                    info['OBSERVATORY_SITE']['value'], "is not J2000.")
+                if (info['TIME_REFERENCE_FRAME']['value']!="Heliocentric JD"):
+                    raise ValueError("Time reference frame for ", 
+                    info['OBSERVATORY_SITE']['value'],
+                     "is not HJD.")
+                
+                # Save information about observatory name and filter used
+                t.meta = {'observatory':info['OBSERVATORY_SITE']['value'],
+                    'filter':info['TIME_SERIES_DATA_FILTER']['value']}
+
+                t = Table(t, masked=False)
+
+                self.tables.append(t)
+                self.masks.append(np.ones(len(t['HJD']), dtype=bool))
+                
+                count = count + 1
+
