@@ -15,6 +15,9 @@ from astroquery.jplhorizons import Horizons
 from astropy.time import Time
 from astropy import units as u
 
+import emcee
+import corner
+
 class SingleLensModel(pm.Model):
     """
     Abstract class for a single lens model.  Subclasses should implement the
@@ -44,6 +47,11 @@ class SingleLensModel(pm.Model):
         # Load and rescale the data to zero median and unit variance
         tables = data.get_standardized_data()
         self.n_bands = len(tables) # number of photometric bands
+
+        # Useful attributes
+        self.t_begin = np.min([table['HJD'][0] for table in tables])
+        self.t_end = np.max([table['HJD'][-1] for table in tables])
+        self.max_npoints = int(np.max([len(table['HJD']) for table in tables]))
 
         # Construct tensors used for computing the models
         t_list = [np.array(table['HJD']) for table in tables]
@@ -132,7 +140,7 @@ class SingleLensModel(pm.Model):
         ages to converge if t0 is not close to true value.
         """
         tmp = event.masks.copy()
-        event.remove_worst_outliers(window_size=30, mad_cutoff=2)
+        event.remove_worst_outliers(window_size=20, mad_cutoff=2)
         tables = event.get_standardized_data()
         fluxes = np.concatenate([table['flux'] for table in tables])
         times = np.concatenate([table['HJD'] for table in tables])
@@ -611,6 +619,65 @@ class SingleLensModel(pm.Model):
 
         return trace
 
+    def sample_with_emcee(self, output_dir, n_walkers=50, n_samples=10000):
+        """
+        Samples the model posterior distribution using emcee.
+                
+        Parameters
+        ----------
+        output_dir : str
+            Path to directory where the trace is to be saved, together with
+            various diagnostic plots and information.
+        n_walkers: int, optional
+            Number of walkers, by default 50.
+        n_samples : int, optional
+            Number of sampling steps, by default 10000.
+        """
+        print("Free parameters:\n", self.free_parameters)
+        print("Initial values of logp for each parameter:\n", 
+            self.initial_logps)
+
+        f = theano.function(self.vars, [self.logpt] + self.deterministics)
+    
+        def log_prob_func(params):
+            dct = self.bijection.rmap(params)
+            args = (dct[k.name] for k in self.vars)
+            results = f(*args)
+            return tuple(results)
+
+        # First we work out the shapes of all of the deterministic variables
+        res = pm.find_MAP()
+        vec = self.bijection.map(res)
+        initial_blobs = log_prob_func(vec)[1:]
+        dtype = [(var.name, float, np.shape(b)) for var,
+             b in zip(self.deterministics, initial_blobs)]
+        
+        # Then sample as usual
+        coords = vec + 1e-5 * np.random.randn(n_walkers, len(vec))
+        nwalkers, ndim = coords.shape
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob_func, 
+            blobs_dtype=dtype)
+        sampler.run_mcmc(coords, n_samples, progress=True)
+
+        # Save sampling stats
+        with open(output_dir + "/sampling_stats_emcee.txt", "w") as text_file:
+            for i, param in enumerate(self.free_parameters):
+                mean = np.mean(sampler.flatchain[:, i])
+                std = np.std(sampler.flatchain[:, i])
+                print(f"parameter, mean, std", file=text_file)
+                print(f"{param}, {mean}, {std}", file=text_file)
+
+        # Save trace to file
+        np.save(output_dir + '/trace_emcee.npy', sampler.chain)
+
+        # Save corner plot
+        figure = corner.corner(sampler.flatchain[2000:, :], 
+            quantiles=[0.16, 0.5, 0.84], 
+            show_titles=True, labels=self.free_parameters)
+        plt.savefig(output_dir + 'corner_emcee.png', bbox_inches='tight')
+
+        return sampler.chain
+
 class OutlierRemovalModel(SingleLensModel):
     #  override __init__ function from pymc3 Model class
     def __init__(self, data):
@@ -634,8 +701,7 @@ class OutlierRemovalModel(SingleLensModel):
         # Initialize non-linear parameters
         ## Posterior is multi-modal in t0 and it's critical that the it is 
         ## initialized near the true value
-        self.t0 = pm.Uniform('t0', T.min(self.t[0][self.mask[0].nonzero()]), 
-            T.max(self.t[0][self.mask[0].nonzero()]), 
+        self.t0 = pm.Uniform('t0', self.t_begin, self.t_end,
             testval=self.t0_guess(data))
         self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.05)
         self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=10.)
@@ -687,8 +753,7 @@ class PointSourcePointLens(SingleLensModel):
         # Initialize non-linear parameters
         ## Posterior is multi-modal in t0 and it's critical that the it is 
         ## initialized near the true value
-        self.t0 = pm.Uniform('t0', T.min(self.t[0][self.mask[0].nonzero()]), 
-            T.max(self.t[0][self.mask[0].nonzero()]), 
+        self.t0 = pm.Uniform('t0', self.t_begin, self.t_end,
             testval=self.t0_guess(data))
         self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
         self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=20.)
@@ -708,9 +773,7 @@ class PointSourcePointLens(SingleLensModel):
                 sd=0.6*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(
-                T.min(self.t[0][self.mask[0].nonzero()]), 
-                T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
+            pm.Uniform.dist(self.t_begin, self.t_end).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
             self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
@@ -760,17 +823,6 @@ class PointSourcePointLens(SingleLensModel):
 #
 #        return A(self.u0)
 
-#    def log_likelihood_single_band(self, r, varF, mag, mask):
-#        """
-#        Implements a white noise Gaussian likelihood function, assuming
-#        that the observations in each photometric band are independent. 
-#        """
-#        # Gaussian likelihood
-#        ll = -0.5*T.sum(T.pow(r[mask.nonzero()], 2.)/varF[mask.nonzero()]) -\
-#                0.5*T.sum(T.log(2*np.pi*varF[mask.nonzero()]))
-#
-#        return ll
-
 class FiniteSourcePointLens(SingleLensModel):
     """
     Finite Source Point Lens model. Finite source effects are computed using
@@ -801,8 +853,7 @@ class FiniteSourcePointLens(SingleLensModel):
         # Initialize non-linear parameters
         ## Posterior is multi-modal in t0 and it's critical that the it is 
         ## initialized near the true value
-        self.t0 = pm.Uniform('t0', T.min(self.t[0][self.mask[0].nonzero()]), 
-            T.max(self.t[0][self.mask[0].nonzero()]), 
+        self.t0 = pm.Uniform('t0', self.t_begin, self.t_end, 
             testval=self.t0_guess(data))
         self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
         self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=20.)
@@ -822,16 +873,14 @@ class FiniteSourcePointLens(SingleLensModel):
                 sd=0.6*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(
-                T.min(self.t[0][self.mask[0].nonzero()]), 
-                T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
+            pm.Uniform.dist(self.t_begin, self.t_end).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
             self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
             self.BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
         # Load FSPL table
-        table = np.load('notebooks/FSPL_table.npy')
+        table = np.load('data/FSPL_table.npy')
         points = [table[:, 0]] # z = u/rho_*
         B0 = table[:, 1]
         B1 = table[:, 2]
@@ -841,21 +890,14 @@ class FiniteSourcePointLens(SingleLensModel):
 #        self.B12_interp = xo.interp.RegularGridInterpolator(points, B12[:, None])
 
         # Specify finite source parameters
-        self.rho_star = self.BoundedNormal('rho_star', mu=0., sd=0.2, testval=0.01)
+        self.rho_star = self.BoundedNormal('rho_star', mu=0., sd=0.2,
+            testval=0.01)
         self.gamma_lambda = self.BoundedNormal('gamma_lambda', 
             mu=T.zeros((self.n_bands, 1)),
             sd=1.*T.ones((self.n_bands, 1)),
             testval=0.5*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
-
-        self.rho_star = pm.Deterministic('logp_rho_star', 
-            self.BoundedNormal.dist(mu=0., sd=0.2).logp(self.rho_star))
-        self.gamma_lambda = pm.Deterministic('logp_gamma_lambda', 
-            self.BoundedNormal.dist(
-                mu=T.zeros((self.n_bands, 1)),
-                sd=T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.gamma_lambda))
-
+        
         # Compute the mean function and the residuals
         mag = self.magnification(self.t) 
         mean_func = self.Delta_F*mag +  self.F_base 
@@ -870,17 +912,27 @@ class FiniteSourcePointLens(SingleLensModel):
 
     def magnification(self, t):
         u = T.sqrt(self.u0**2 + ((t - self.t0)/self.tE)**2)
-        A = lambda u, z: (u**2 + 2)/(u*T.sqrt(u**2 + 4))*\
-            (self.B0_interp.evaluate(z.T).T - self.gamma_lambda*\
-            self.B1_interp.evaluate(z.T).T)
+
+        A = lambda u, z, B0, B1: (u**2 + 2)/(u*T.sqrt(u**2 + 4))*\
+            (B0 - self.gamma_lambda*B1)
 
         z = u/self.rho_star
 
-        return (A(u, z) - 1)/(A(self.u0, z) - 1) 
+        # This is incredibly inefficient
+        B0_list = [] 
+        B1_list = []
+        for i in range(self.n_bands):
+            z_ = z[i].reshape((self.max_npoints, 1))
+            B0_list.append(self.B0_interp.evaluate(z_).T[0])
+            B1_list.append(self.B1_interp.evaluate(z_).T[0])
+
+        B0 = T.stack(B0_list)
+        B1 = T.stack(B1_list)
+        return (A(u, z, B0, B1) - 1)/(A(self.u0, z, B0, B1) - 1) 
 
 class PointSourcePointLensAnnualParallax(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant', 
-            kernel='white_noise'):
+            kernel='white_noise', parametrization='standard'):
         super(PointSourcePointLensAnnualParallax, self).__init__(data,
             errorbar_rescaling, kernel)
 
@@ -955,8 +1007,7 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
 #        self.a_vert = pm.Exponential('a_vert', lam=10, testval=0.01)
 
         self.a_par = pm.Normal('a_par', mu=0, sd=0.1, testval=0.01)
-        self.a_vert = pm.Normal('a_vert', mu=0, sd=0.1, testval=0.01)
-
+        self.kappa_0 = pm.Normal('kappa_0', mu=0, sd=0.1, testval=0.01)
 
         # Initialize linear parameters
         self.Delta_F = self.BoundedNormal('Delta_F', 
@@ -974,12 +1025,10 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         # Initialize non-linear parameters
         ## Posterior is multi-modal in t0 and it's critical that the it is 
         ## initialized near the true value
-        self.t0_prime = pm.Uniform('t0_prime', T.min(self.t[0][self.mask[0].nonzero()]), 
-            T.max(self.t[0][self.mask[0].nonzero()]), 
+        self.t0_prime = pm.Uniform('t0_prime', self.t_begin, self.t_end,
             testval=self.t0_guess(data))
         self.u0_prime = pm.Normal('u0_prime', mu=0., sd=1., testval=0.05)
-        self.omega_E_prime = self.BoundedNormal('omega_E_prime', mu=0., sd=0.5, 
-            testval=0.05)
+        self.v0_prime = pm.Normal('v0_prime', mu=0., sd=1., testval=0.05)
         
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
@@ -993,9 +1042,7 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
                 sd=0.6*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1)).logp(self.F_base))
         self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(
-                T.min(self.t[0][self.mask[0].nonzero()]), 
-                T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0_prime))
+            pm.Uniform.dist(self.t_begin, self.t_end).logp(self.t0_prime))
 #        self.logp_u0 = pm.Deterministic('logp_u0', 
 #            self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0_prime))
 #        self.logp_teff = pm.Deterministic('logp_teff', 
@@ -1039,30 +1086,30 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         gamma_n_ddot_t0 = self.gamma_n_ddot_interp.evaluate(\
             T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
 
+        a_vert = self.kappa_0 - self.v0_prime**2/self.u0_prime**2
+
         # Compute u(t)
-        sign = self.u0_prime/T.abs_(self.u0_prime)
-        p_E = sign*T.sqrt((self.a_par**2 +\
-             self.a_vert**2)/(gamma_w_ddot_t0**2 + gamma_n_ddot_t0**2))
+        pi_E = T.sqrt((self.a_par**2 +\
+             a_vert**2)/(gamma_w_ddot_t0**2 + gamma_n_ddot_t0**2))
 
-        sin_phi = p_E*(self.a_par*gamma_n_ddot_t0 -\
-             self.a_vert*gamma_w_ddot_t0)/(self.a_par**2 + self.a_vert**2)
+        sin_phi = pi_E*(a_vert*gamma_w_ddot_t0 -\
+             self.a_par*gamma_n_ddot_t0)/(self.a_par**2 + a_vert**2)
 
-        cos_phi = p_E*(self.a_par*gamma_w_ddot_t0 +\
-             self.a_vert*gamma_n_ddot_t0)/(self.a_par**2 + self.a_vert**2)
+        cos_phi = pi_E*(a_vert*gamma_n_ddot_t0 +\
+             self.a_par*gamma_w_ddot_t0)/(self.a_par**2 + a_vert**2)
 
-        u_w = self.u0_prime*(-sin_phi + p_E*(gamma_w - gamma_w_t0)) +\
-            (self.omega_E_prime*cos_phi - p_E*gamma_w_dot_t0)*(t - self.t0_prime)
-        u_n = self.u0_prime*(cos_phi + p_E*(gamma_n - gamma_n_t0)) +\
-            (self.omega_E_prime*sin_phi - p_E*gamma_n_dot_t0)*(t - self.t0_prime)
+        u_w = self.u0_prime*sin_phi + pi_E*(gamma_w - gamma_w_t0) +\
+            (self.v0_prime*cos_phi - pi_E*gamma_w_dot_t0)*(t - self.t0_prime)
+        u_n = self.u0_prime*cos_phi + pi_E*(gamma_n - gamma_n_t0) +\
+            (-self.v0_prime*sin_phi - pi_E*gamma_n_dot_t0)*(t - self.t0_prime)
 
         # Deterministic transform
-        t_E =  1/T.sqrt(self.omega_E_prime**2 -\
-            2*self.omega_E_prime*p_E*(gamma_w_dot_t0*cos_phi +\
-            gamma_n_dot_t0*sin_phi) + p_E**2*(gamma_w_dot_t0**2 +\
-            gamma_n_dot_t0**2))
+        t_E =  1/T.sqrt(self.v0_prime*2 -\
+            2*self.v0_prime*pi_E*(gamma_w_dot_t0*cos_phi - gamma_n_dot_t0*sin_phi)\
+                + pi_E**2*(gamma_w_dot_t0**2 + gamma_n_dot_t0**2))
         
         self.t_E = t_E
-        self.pi_E = self.u0_prime*p_E
+        self.pi_E = pi_E
 
         return T.sqrt(u_w**2 + u_n**2)  
 
@@ -1178,8 +1225,7 @@ class PointSourcePointLensMarginalized(SingleLensModel):
         # Initialize non-linear parameters
         ## Posterior is multi-modal in t0 and it's critical that the it is 
         ## initialized near the true value
-        self.t0 = pm.Uniform('t0', T.min(self.t[0][self.mask[0].nonzero()]), 
-            T.max(self.t[0][self.mask[0].nonzero()]), 
+        self.t0 = pm.Uniform('t0', self.t_begin, self.t_end,
             testval=self.t0_guess(data))
         self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
         self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=20.)
@@ -1189,9 +1235,7 @@ class PointSourcePointLensMarginalized(SingleLensModel):
 
         ## Save log prior for each parameter for hierarhical modeling 
         self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(
-                T.min(self.t[0][self.mask[0].nonzero()]), 
-                T.max(self.t[0][self.mask[0].nonzero()])).logp(self.t0))
+            pm.Uniform.dist(self.t_begin, self.t_end).logp(self.t0))
         self.logp_u0 = pm.Deterministic('logp_u0', 
             self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
         self.logp_teff = pm.Deterministic('logp_teff', 
