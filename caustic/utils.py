@@ -10,10 +10,10 @@ from data import OGLEData
 
 mpl.rc('font',**{'family':'serif','serif':['Palatino']})
 mpl.rc('text', usetex=False)
-mpl.rcParams['axes.labelsize'] = 20
-mpl.rcParams['xtick.labelsize'] = 20
-mpl.rcParams['ytick.labelsize'] = 20
-mpl.rcParams['axes.titlesize'] = 16
+mpl.rcParams['axes.labelsize'] = 22
+mpl.rcParams['xtick.labelsize'] = 22
+mpl.rcParams['ytick.labelsize'] = 22
+mpl.rcParams['axes.titlesize'] = 18
 
 def qq_plot(ax, residuals):
     """Plots quantile-quantile plot of residuals vs draws from a Gaussian."""
@@ -72,6 +72,10 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
     ax[1].set_xlabel('HJD - 2450000')
     ax[1].set_ylabel('Residuals')
 
+    for a in ax.ravel():
+        a.set_xlim(t_grids[0][0], t_grids[0][-1])
+#        a.set_xlim(7820, 8020)
+
     # Plot predictions for various samples
     for n in range(model_instance.n_bands): # iterate over bands
         for i in range(n_samples):
@@ -84,7 +88,7 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
 
         residuals =  tables[n]['flux'] - quantile_predictions[1]
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
-            fmt='.', color='C' + str(n))
+            fmt='o', color='C' + str(n), alpha=0.5)
         ax[1].grid(True)
 
 def plot_map_model_and_residuals(ax, event, pm_model, map_point):
@@ -130,7 +134,7 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point):
     for n in range(model_instance.n_bands): # iterate over bands
         residuals = np.array(tables[n]['flux']) - pred_at_observed_times[n]
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
-            fmt='.', color='C' + str(n))
+            fmt='o', color='C' + str(n), alpha=0.5)
         ax[1].grid(True)
 
 def plot_prior_model_samples(ax, event, pm_model, n_samples):

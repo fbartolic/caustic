@@ -8,9 +8,11 @@ import exoplanet as xo
 import theano.tensor as T
 import corner
 
-from data import OGLEData
-from data import NASAExoArchiveData
-from models import FiniteSourcePointLens
+from data import *
+from astropy.table import Table
+from astropy.coordinates import SkyCoord
+
+from models import *
 from utils import plot_histograms_of_prior_samples
 from utils import plot_prior_model_samples
 from utils import plot_model_and_residuals
@@ -19,19 +21,28 @@ from utils import plot_map_model_and_residuals
 random.seed(42)
 
 # Load event data
-#data_dir = '/home/star/fb90/data/OGLE_ews/2017/blg-0324' # 0324(finite) 0441 (parallax)
-data_dir = 'data/MB08310/'
-event = NASAExoArchiveData(data_dir)
+#data_dir = '/home/star/fb90/data/OGLE_ews/2017/blg-0441' # 0324(finite) 0441 (parallax)
+#event = OGLEData(data_dir)
+
+event_dir = 'data/OB05086/'
+event = Data()
+t = Table.read(event_dir + 'phot.dat', format='ascii', names=('HJD', 'mag', 'mag_err'))
+t['HJD'] = t['HJD'] + 2450000
+t.meta = {'observatory':'OGLE', 'filter':'I'}
+event.tables.append(t)
+mask = np.ones(len(t['HJD']), dtype=bool)
+event.masks.append(mask)
+event.coordinates = SkyCoord("18h04m45.71s", "-26d59m15.2s")
+event.event_name = 'OGLE-2005-BLG-086'
+event.units = 'magnitudes'
 
 # Define output directories
 output_dir1 = 'output/' + event.event_name +\
-        '/FiniteSourcePointLens'
+        '/PointSourcePointLensAnnualParallax'
 output_dir2 = 'output/' + event.event_name +\
-        '/FiniteSourcePointLensGP'
+        '/PointSourcePointLensAnnualParallaxGP'
 
 # Create output directory
-if not os.path.exists(output_dir1):
-    os.makedirs(output_dir1)
 if not os.path.exists(output_dir1):
     os.makedirs(output_dir1)
 
@@ -45,12 +56,13 @@ print("Numpy version", np.__version__)
 print("PyMC3 version", pm.__version__)
 
 # Test non-GP model
-with FiniteSourcePointLens(event, kernel='white_noise', 
-    errorbar_rescaling='additive_variance') as model1:
+with PointSourcePointLensAnnualParallax(event, kernel='white_noise', 
+    errorbar_rescaling='additive_variance', 
+    parametrization='two_component') as model1:
     print("Initializing model.")
 
 # Sample the priors and save the plots
-#plot_histograms_of_prior_samples(event, model1, output_dir1);
+#plot_histograms_of_prior_samples(event, model1, output_dir1)
 
 # Plot samples from prior in data space
 #fig, ax = plt.subplots(figsize=(25, 10))
@@ -61,6 +73,8 @@ with FiniteSourcePointLens(event, kernel='white_noise',
 #with model1:
 #    map_point = xo.optimize()
 #
+#print(map_point)
+
 #fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
 #            figsize=(25, 10), sharex=True)
 #plot_map_model_and_residuals(ax, event, model1, map_point)
@@ -68,46 +82,49 @@ with FiniteSourcePointLens(event, kernel='white_noise',
 
 # Sample the model
 with model1:
-#    trace1 = model1.sample(output_dir1, n_tune=2000, n_samples=2000)
-    trace1 = model1.sample_with_emcee(output_dir1, n_walkers=100, n_samples=10000)
+    print('model.vars' , model1.vars)
+    trace1 = model1.sample(output_dir1, n_tune=2000, n_samples=2000)
+#    trace1 = model1.sample_with_emcee(output_dir1, n_walkers=50, n_samples=5000)
 #    trace1 = pm.load_trace(output_dir1 + '/model.trace')
 
 # Plot corner plot of the samples
-trace1_df = pm.trace_to_dataframe(trace1, include_transformed=True)
-print('columns', trace1_df.columns)
-
-params = ['Delta_F_lowerbound____0_0', 't0_interval__',
-       'u0_lowerbound__', 'teff_lowerbound__', 'rho_star_lowerbound__']
-
-mpl.rcParams['axes.labelsize'] = 6
-mpl.rcParams['xtick.labelsize'] = 6
-mpl.rcParams['ytick.labelsize'] = 6
-mpl.rcParams['axes.titlesize'] = 6
-
-figure = corner.corner(trace1_df[params], quantiles=[0.16, 0.5, 0.84], 
-    show_titles=True)
-plt.show()
+#trace1_df = pm.trace_to_dataframe(trace1, include_transformed=True)
+#print('columns', trace1_df.columns)
+#
+#params = ['Delta_F_lowerbound____0_0', 't0_prime_interval__',
+#       'u0_prime', 'v0_prime', 'a_par', 
+#       'kappa_0']
+#
+#mpl.rcParams['axes.labelsize'] = 6
+#mpl.rcParams['xtick.labelsize'] = 6
+#mpl.rcParams['ytick.labelsize'] = 6
+#mpl.rcParams['axes.titlesize'] = 6
+#
+#figure = corner.corner(trace1_df[params], quantiles=[0.16, 0.5, 0.84], 
+#    show_titles=True)
+#plt.show()
 
 # Plot model
 fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
             figsize=(25, 10), sharex=True)
 plot_model_and_residuals(ax, event, model1, output_dir1 + '/model.trace', 100)
+plt.savefig(output_dir1 + '/model.png', bbox_inches='tight')
 plt.show()
 
 # Test GP model
-#with FiniteSourcePointLens(event, kernel='matern32', 
+#with PointSourcePointLens(event, kernel='matern32', 
 #    errorbar_rescaling='additive_variance') as model2:
 #    print("Initializing model.")
-#
-## Sample the priors and save the plots
-##plot_histograms_of_prior_samples(event, model2, output_dir1)
-#
-## Plot samples from prior in data space
+
+# Sample the priors and save the plots
+#plot_histograms_of_prior_samples(event, model2, output_dir2)
+
+# Plot samples from prior in data space
 #fig, ax = plt.subplots(figsize=(25, 10))
 #plot_prior_model_samples(ax, event, model2, 100)
 #plt.show()
-#
-## Find MAP solution and plot it
+
+# Find MAP solution and plot it
 #with model2:
 #    map_point = xo.optimize()
 #
@@ -115,21 +132,19 @@ plt.show()
 #            figsize=(25, 10), sharex=True)
 #plot_map_model_and_residuals(ax, event, model2, map_point)
 #plt.show()
-#
-## Sample the model
+
+# Sample the model
 #with model2:
 #    trace2 = model2.sample(output_dir2, n_tune=2000, n_samples=2000)
 ##    trace2 = pm.load_trace(output_dir1 + '/model.trace')
-#
-## Save autocorrelation plots for the chains
-##pm.plots.autocorrplot(trace2)
 #
 ## Plot corner plot of the samples
 #trace2_df = pm.trace_to_dataframe(trace2, include_transformed=True)
 #print('columns', trace2_df.columns)
 #
-#params = ['Delta_F_lowerbound____0_0', 't0_interval__',
-#      'u0_lowerbound__', 'teff_lowerbound__', 'rho_star_lowerbound__']
+#params = ['Delta_F_lowerbound____0_0', 't0_interval__', 'teff_lowerbound__',
+#       'u0_lowerbound__', 'sigma_lowerbound____0_0', 'rho_log____0_0']
+#
 #
 #mpl.rcParams['axes.labelsize'] = 6
 #mpl.rcParams['xtick.labelsize'] = 6
@@ -145,4 +160,4 @@ plt.show()
 #            figsize=(25, 10), sharex=True)
 #plot_model_and_residuals(ax, event, model2, output_dir2 + '/model.trace', 100)
 #plt.show()
-#
+

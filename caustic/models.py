@@ -614,8 +614,8 @@ class SingleLensModel(pm.Model):
             print(f'Percentage of Divergent %.1f' % divperc, file=text_file)
 
         # Save traceplots
-#        _ = pm.traceplot(trace)
-#        plt.savefig(output_dir + '/traceplots.png')
+        _ = pm.traceplot(trace)
+        plt.savefig(output_dir + '/traceplots.png')
 
         return trace
 
@@ -670,11 +670,20 @@ class SingleLensModel(pm.Model):
         # Save trace to file
         np.save(output_dir + '/trace_emcee.npy', sampler.chain)
 
+        # Save traceplots to file
+        fig, ax = plt.subplots(ndim, 1)
+        for i, param in enumerate(self.free_parameters):
+            mask = sampler.acceptance_fraction > .08
+            ax[i].plot(sampler.chain[mask, ::10, i].T, 'k-', alpha=0.2);
+            ax[i].set_ylabel(param)
+
+        plt.savefig(output_dir + '/traceplots_emcee.png', bbox_inches='tight')
+
         # Save corner plot
         figure = corner.corner(sampler.flatchain[2000:, :], 
             quantiles=[0.16, 0.5, 0.84], 
             show_titles=True, labels=self.free_parameters)
-        plt.savefig(output_dir + 'corner_emcee.png', bbox_inches='tight')
+        plt.savefig(output_dir + '/corner_emcee.png', bbox_inches='tight')
 
         return sampler.chain
 
@@ -932,7 +941,7 @@ class FiniteSourcePointLens(SingleLensModel):
 
 class PointSourcePointLensAnnualParallax(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant', 
-            kernel='white_noise', parametrization='standard'):
+            kernel='white_noise', parametrization='angle_magnitue'):
         super(PointSourcePointLensAnnualParallax, self).__init__(data,
             errorbar_rescaling, kernel)
 
@@ -947,7 +956,8 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
 
         # Calculate the projection of Eath-Sun position vector on the plane
         # of the sky
-        coordinates_ecliptic = data.coordinates.transform_to('geocentrictrueecliptic')
+        coordinates_ecliptic = \
+            data.coordinates.transform_to('geocentrictrueecliptic')
         lambda_0  = coordinates_ecliptic.lon.value*(np.pi/180)
         beta_0  = coordinates_ecliptic.lat.value*(np.pi/180)
 
@@ -963,36 +973,16 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         gamma_w = r_sun*np.sin((lambda_sun - lambda_0))
         gamma_n = r_sun*np.sin(beta_0)*np.cos(lambda_sun - lambda_0)
 
-        gamma_w_dot = n*((1 + e*np.cos(n*(t - tp)))*\
-            np.cos(lambda_sun - lambda_0)+\
-            e*np.sin(n*(t - tp))*np.sin(lambda_sun - lambda_0))
-        gamma_n_dot = -n*np.sin(beta_0)*((1 + e*np.cos(n*(t - tp)))\
-            *np.sin(lambda_sun - lambda_0) -\
-            e*np.sin(n*(t - tp))*np.cos(lambda_sun - lambda_0))
-
-        gamma_w_ddot = -n**2*(1 + 2*e*np.cos(n*(t - tp)))*\
-            np.sin(lambda_sun - lambda_0)
-        gamma_n_ddot = -n**2*np.sin(beta_0)*(1 + 2*e*np.cos(n*(t - tp)))*\
-            np.cos(lambda_sun - lambda_0)
-
         # Need to define an interpolator for all gamma functions for
         points = [t] # Times for which we have JPL Horizons data
         self.gamma_w_interp = xo.interp.RegularGridInterpolator(points, 
             gamma_w[:, None])
         self.gamma_n_interp = xo.interp.RegularGridInterpolator(points, 
             gamma_n[:, None])
-        self.gamma_w_dot_interp = xo.interp.RegularGridInterpolator(points, 
-            gamma_w_dot[:, None])
-        self.gamma_n_dot_interp = xo.interp.RegularGridInterpolator(points, 
-            gamma_n_dot[:, None])
-        self.gamma_w_ddot_interp = xo.interp.RegularGridInterpolator(points, 
-            gamma_w_ddot[:, None])
-        self.gamma_n_ddot_interp = xo.interp.RegularGridInterpolator(points, 
-            gamma_n_ddot[:, None])
 
         # Interpolate gamma functions onto the grid of observed times, this 
         # happens only once when the model is initialized
-        n_max =  np.max([len(table) for table in data.tables])
+        n_max =  self.max_npoints
         gamma_w = T._shared(np.stack([np.pad(
             self.gamma_w_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
             (0, n_max - len(table['HJD'])), 'constant', 
@@ -1001,13 +991,6 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             self.gamma_n_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
             (0, n_max - len(table['HJD'])), 'constant', 
             constant_values=(0.,)) for table in data.tables]))
-
-        # Acceleration parameters
-#        self.a_par = pm.Exponential('a_par', lam=10, testval=0.01)
-#        self.a_vert = pm.Exponential('a_vert', lam=10, testval=0.01)
-
-        self.a_par = pm.Normal('a_par', mu=0, sd=0.1, testval=0.01)
-        self.kappa_0 = pm.Normal('kappa_0', mu=0, sd=0.1, testval=0.01)
 
         # Initialize linear parameters
         self.Delta_F = self.BoundedNormal('Delta_F', 
@@ -1022,42 +1005,75 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             testval=T.zeros((self.n_bands, 1)),
             shape=(self.n_bands, 1))
 
-        # Initialize non-linear parameters
-        ## Posterior is multi-modal in t0 and it's critical that the it is 
-        ## initialized near the true value
-        self.t0_prime = pm.Uniform('t0_prime', self.t_begin, self.t_end,
-            testval=self.t0_guess(data))
-        self.u0_prime = pm.Normal('u0_prime', mu=0., sd=1., testval=0.05)
-        self.v0_prime = pm.Normal('v0_prime', mu=0., sd=1., testval=0.05)
-        
-        ## Save log prior for each parameter for hierarhical modeling 
-        self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            self.BoundedNormal.dist(
-                mu=T.zeros((self.n_bands, 1)),
-                sd=50.*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.Delta_F))
-        self.logp_F_base = pm.Deterministic('logp_F_base',
-            pm.Normal.dist(
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=0.6*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.F_base))
-        self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(self.t_begin, self.t_end).logp(self.t0_prime))
-#        self.logp_u0 = pm.Deterministic('logp_u0', 
-#            self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0_prime))
-#        self.logp_teff = pm.Deterministic('logp_teff', 
-#            self.BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
+        if (parametrization=='angle_magnitude'):
+            self.t0 = pm.Uniform('t0', self.t_begin, self.t_end, 
+                testval=self.t0_guess(data))
+            self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
+            self.omega_E = self.BoundedNormal('omega_E', mu=0., sd=1., 
+                testval=0.1)
+            self.pi_E = self.BoundedNormal('pi_E', mu=0., sd=1., testval=0.01)
+            self.psi = xo.distributions.Angle('psi') 
+
+            mag = self.magnification(self.t, gamma_w, gamma_n, parametrization) 
+            
+        elif (parametrization=='two_component'):
+            self.t0 = pm.Uniform('t0', self.t_begin, self.t_end, 
+                testval=self.t0_guess(data))
+            self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
+            self.omega_E = self.BoundedNormal('omega_E', mu=0., sd=1., 
+                testval=0.1)
+            self.pi_EW = pm.Normal('pi_EW', mu=0., sigma=1., testval=0.01)
+            self.pi_EN = pm.Normal('pi_EN', mu=0., sigma=1., testval=0.01)
+
+            mag = self.magnification(self.t, gamma_w, gamma_n, parametrization) 
+
+        else:
+            # Compute 1st and 2nd order derivatives of the gamma vector
+            gamma_w_dot = n*((1 + e*np.cos(n*(t - tp)))*\
+                np.cos(lambda_sun - lambda_0)+\
+                e*np.sin(n*(t - tp))*np.sin(lambda_sun - lambda_0))
+            gamma_n_dot = -n*np.sin(beta_0)*((1 + e*np.cos(n*(t - tp)))\
+                *np.sin(lambda_sun - lambda_0) -\
+                e*np.sin(n*(t - tp))*np.cos(lambda_sun - lambda_0))
+
+            gamma_w_ddot = -n**2*(1 + 2*e*np.cos(n*(t - tp)))*\
+                np.sin(lambda_sun - lambda_0)
+            gamma_n_ddot = -n**2*np.sin(beta_0)*(1 + 2*e*np.cos(n*(t - tp)))*\
+                np.cos(lambda_sun - lambda_0)
+
+            # Initialize interpolators
+            self.gamma_w_dot_interp = xo.interp.RegularGridInterpolator(points, 
+                gamma_w_dot[:, None])
+            self.gamma_n_dot_interp = xo.interp.RegularGridInterpolator(points, 
+                gamma_n_dot[:, None])
+            self.gamma_w_ddot_interp = xo.interp.RegularGridInterpolator(points, 
+                gamma_w_ddot[:, None])
+            self.gamma_n_ddot_interp = xo.interp.RegularGridInterpolator(points, 
+                gamma_n_ddot[:, None])
+
+            # Acceleration parameters
+    #        self.a_par = pm.Exponential('a_par', lam=10, testval=0.01)
+    #        self.a_vert = pm.Exponential('a_vert', lam=10, testval=0.01)
+
+            self.a_par = pm.Normal('a_par', mu=0, sd=0.1, testval=0.01)
+            self.kappa_0 = pm.Normal('kappa_0', mu=0, sd=0.1, testval=0.01)
+            self.t0_prime = pm.Uniform('t0_prime', self.t_begin, self.t_end,
+                testval=self.t0_guess(data))
+            self.u0_prime = pm.Normal('u0_prime', mu=0., sd=1., testval=0.05)
+            self.v0_prime = pm.Normal('v0_prime', mu=0., sd=1., testval=0.05)
+
+            # Compute the magnification
+            self.t_E = 0.
+            self.pi_E = 0.
+            mag = self.magnification_3(self.t, gamma_w, gamma_n) 
+
+            # Save t_E, and pi_E parameters to trace
+            pm.Deterministic('t_E', self.t_E)
+            pm.Deterministic('pi_E', self.pi_E)
 
         # Compute the mean function and the residuals
-        self.t_E = 0.
-        self.pi_E = 0.
-        mag = self.magnification(self.t, gamma_w, gamma_n) 
         mean_func = self.Delta_F*mag +  self.F_base 
         self.r = self.F - mean_func
-
-        # Save t_E, and pi_E parameters to trace
-        pm.Deterministic('t_E', self.t_E)
-        pm.Deterministic('pi_E', self.pi_E)
 
         # Compute the log_likelihood
         self.log_likelihood()
@@ -1066,12 +1082,23 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         self.free_parameters = [RV.name for RV in self.basic_RVs]
         self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
 
+    def compute_u_1(self, t, gamma_w, gamma_n):
+        psi = self.psi + np.pi
+        u_w = -self.u0*T.sin(psi) - self.omega_E*(t - self.t0)*T.cos(psi) +\
+            self.pi_E*gamma_w
+        u_n = self.u0*T.cos(psi) - self.omega_E*(t - self.t0)*T.sin(psi) +\
+            self.pi_E*gamma_n
 
-        # Define helpful class attributes
-        self.free_parameters = [RV.name for RV in self.basic_RVs]
-        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+        return T.sqrt(u_w**2 + u_n**2)
 
-    def compute_u(self, t, gamma_w, gamma_n):
+    def compute_u_2(self, t, gamma_w, gamma_n):
+        u_w = -self.omega_E*(t - self.t0) + self.pi_EW*gamma_w +\
+             self.pi_EN*gamma_n
+        u_n = self.u0 + self.pi_EW*gamma_n - self.pi_EN*gamma_w
+
+        return T.sqrt(u_w**2 + u_n**2)
+
+    def compute_u_3(self, t, gamma_w, gamma_n):
         # Parallax parameters
         gamma_w_t0 = self.gamma_w_interp.evaluate(\
             T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0] 
@@ -1113,11 +1140,21 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
 
         return T.sqrt(u_w**2 + u_n**2)  
 
-    def magnification(self, t, gamma_w, gamma_n):
-        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-        u = self.compute_u(t, gamma_w, gamma_n)
+    def magnification(self, t, gamma_w, gamma_n, parametrization):
+        if (parametrization=='angle_magnitude'):
+            A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+            u = self.compute_u_1(t, gamma_w, gamma_n)
+            return (A(u) - 1)/(A(self.u0) - 1) 
 
-        return (A(u) - 1)/(A(self.u0_prime) - 1) 
+        elif (parametrization=='two_component'):
+            A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+            u = self.compute_u_2(t, gamma_w, gamma_n)
+            return (A(u) - 1)/(A(self.u0) - 1) 
+
+        else:
+            A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+            u = self.compute_u_3(t, gamma_w, gamma_n)
+            return (A(u) - 1)/(A(self.u0_prime) - 1) 
     
     def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
         n_max =  np.max([len(t_grid) for t_grid in t_grids])
