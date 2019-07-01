@@ -8,13 +8,11 @@ import exoplanet as xo
 import theano.tensor as T
 import corner
 
-from data import OGLEData
-from data import NASAExoArchiveData
-from models import FiniteSourcePointLens
-from utils import plot_histograms_of_prior_samples
-from utils import plot_prior_model_samples
-from utils import plot_model_and_residuals
-from utils import plot_map_model_and_residuals
+from data import *
+from models import *
+from utils import *
+
+np.set_printoptions(threshold=sys.maxsize)
 
 random.seed(42)
 
@@ -25,9 +23,9 @@ event = NASAExoArchiveData(data_dir)
 
 # Define output directories
 output_dir1 = 'output/' + event.event_name +\
-        '/FiniteSourcePointLens'
+        '/PointSourcePointLens'
 output_dir2 = 'output/' + event.event_name +\
-        '/FiniteSourcePointLensGP'
+        '/FiniteSourcePointLens'
 
 # Create output directory
 if not os.path.exists(output_dir1):
@@ -45,7 +43,7 @@ print("Numpy version", np.__version__)
 print("PyMC3 version", pm.__version__)
 
 # Test non-GP model
-with FiniteSourcePointLens(event, kernel='white_noise', 
+with PointSourcePointLens(event, kernel='white_noise', 
     errorbar_rescaling='additive_variance') as model1:
     print("Initializing model.")
 
@@ -61,6 +59,8 @@ with FiniteSourcePointLens(event, kernel='white_noise',
 #with model1:
 #    map_point = xo.optimize()
 #
+#print(map_point)
+#
 #fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},
 #            figsize=(25, 10), sharex=True)
 #plot_map_model_and_residuals(ax, event, model1, map_point)
@@ -69,24 +69,25 @@ with FiniteSourcePointLens(event, kernel='white_noise',
 # Sample the model
 with model1:
 #    trace1 = model1.sample(output_dir1, n_tune=2000, n_samples=2000)
-    trace1 = model1.sample_with_emcee(output_dir1, n_walkers=100, n_samples=10000)
-#    trace1 = pm.load_trace(output_dir1 + '/model.trace')
+#    trace1 = model1.sample_with_emcee(output_dir1, n_walkers=100, 
+#        n_samples=10000)
+    trace1 = pm.load_trace(output_dir1 + '/model.trace')
 
 # Plot corner plot of the samples
-trace1_df = pm.trace_to_dataframe(trace1, include_transformed=True)
-print('columns', trace1_df.columns)
-
-params = ['Delta_F_lowerbound____0_0', 't0_interval__',
-       'u0_lowerbound__', 'teff_lowerbound__', 'rho_star_lowerbound__']
+#trace1_df = pm.trace_to_dataframe(trace1, include_transformed=True)
+#print('columns', trace1_df.columns)
+#
+#params = ['Delta_F_lowerbound____0_0', 't0_interval__',
+#       'u0_lowerbound__', 'teff_lowerbound__']#, 'rho_star_lowerbound__']
 
 mpl.rcParams['axes.labelsize'] = 6
 mpl.rcParams['xtick.labelsize'] = 6
 mpl.rcParams['ytick.labelsize'] = 6
 mpl.rcParams['axes.titlesize'] = 6
 
-figure = corner.corner(trace1_df[params], quantiles=[0.16, 0.5, 0.84], 
-    show_titles=True)
-plt.show()
+#figure = corner.corner(trace1_df[params], quantiles=[0.16, 0.5, 0.84], 
+#    show_titles=True)
+#plt.show()
 
 # Plot model
 fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios':[3,1]},

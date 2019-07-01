@@ -7,11 +7,11 @@ from matplotlib import pyplot as plt
 import exoplanet as xo
 from exoplanet.gp import terms, GP
 
-from scipy.special import gamma
+from scipy.special import zeta
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
 
-from astroquery.jplhorizons import Horizons
+from astropy.coordinates import get_body_barycentric_posvel
 from astropy.time import Time
 from astropy import units as u
 
@@ -36,8 +36,8 @@ class SingleLensModel(pm.Model):
             Caustic data object.
         errorbar_rescaling : str, optional
             Defines how the error bars are treated in models. Choose between 
-            'constant', 'additive_variance', and  'flux_dependant', by default 
-            'constant'.
+            'none', constant', 'additive_variance', and  'flux_dependant', 
+            by default 'constant'.
         kernel : str, optional
             Choose a GP kernel, options are 'white_noise' and 'matern32', by 
             default 'white_noise'.
@@ -52,6 +52,7 @@ class SingleLensModel(pm.Model):
         self.t_begin = np.min([table['HJD'][0] for table in tables])
         self.t_end = np.max([table['HJD'][-1] for table in tables])
         self.max_npoints = int(np.max([len(table['HJD']) for table in tables]))
+        self.fluxes_parametrization = 'dominik2009'
 
         # Construct tensors used for computing the models
         t_list = [np.array(table['HJD']) for table in tables]
@@ -128,10 +129,41 @@ class SingleLensModel(pm.Model):
 
     def magnification(self, t, u0):
         """
-        Calculates the PSPL magnification fraction [A(u) - 1]/[A(u0) - 1]
-        where A(u) is the analytic PSPL magnification.
+        Calculates the magnification fraction [A(u) - 1]/[A(u0) - 1]
+        where A(u) is the magnification function.
         """
         pass
+    
+    def initialize_linear_parameters(self):
+        """
+        Initializes linear flux parameters Delta_F and F_base. The total 
+        number of linear parameters is then 2*n_bands.
+        """
+        if (self.fluxes_parametrization=='dominik2009'):
+            # Initialize linear parameters
+            self.Delta_F = self.BoundedNormal('Delta_F', 
+                mu=T.zeros((self.n_bands, 1)),
+                sd=50.*T.ones((self.n_bands, 1)),
+                testval=5.*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            self.F_base = pm.Normal('F_base', 
+                mu=T.zeros((self.n_bands, 1)), 
+                sd=0.6*T.ones((self.n_bands, 1)),
+                testval=T.zeros((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+        elif (self.fluxes_parametrization=='standard'):
+            self.FS = pm.Normal('F_S', 
+                mu=T.zeros((self.n_bands, 1)),
+                sd=10.*T.ones((self.n_bands, 1)),
+                testval=3.*T.ones((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
+
+            self.FB = pm.Normal('F_B', 
+                mu=T.zeros((self.n_bands, 1)), 
+                sd=10*T.ones((self.n_bands, 1)),
+                testval=T.zeros((self.n_bands, 1)),
+                shape=(self.n_bands, 1))
 
     def t0_guess(self, event):
         """
@@ -166,7 +198,11 @@ class SingleLensModel(pm.Model):
         value at highest magnification and it vanishes otherwise.
 
         """
-        if (self.errorbar_rescaling=='constant'):
+        if (self.errorbar_rescaling=='none'):
+            # Diagonal terms of the covariance matrix
+            self.varF = self.sigF**2
+
+        elif (self.errorbar_rescaling=='constant'):
             ## Noise model parameters
             self.A = self.BoundedNormal1('A', 
                 mu=T.ones((self.n_bands, 1)),
@@ -174,14 +210,6 @@ class SingleLensModel(pm.Model):
                 testval=1.5*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1))
 
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    testval=1.5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            
             # Diagonal terms of the covariance matrix
             self.varF = (self.A*self.sigF)**2
 
@@ -198,19 +226,7 @@ class SingleLensModel(pm.Model):
                 sd=1*T.ones((self.n_bands, 1)),
                 testval=0.01*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1))
-
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=1*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
+            
             # Diagonal terms of the covariance matrix
             self.varF = (self.A*self.sigF)**2 + self.B**2
 
@@ -228,18 +244,6 @@ class SingleLensModel(pm.Model):
                 testval=0.01*T.ones((self.n_bands, 1)),
                 shape=(self.n_bands, 1))
 
-            ## Save log prior for each parameter for hierarhical modeling 
-            self.logp_A = pm.Deterministic('logp_A',
-                pm.Normal.dist(
-                    mu=T.ones((self.n_bands, 1)),
-                    sd=2.*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.A))
-            self.logp_B = pm.Deterministic('logp_B',
-                pm.Normal.dist(
-                    mu=T.zeros((self.n_bands, 1)), 
-                    sd=5*T.ones((self.n_bands, 1)),
-                    shape=(self.n_bands, 1)).logp(self.B))
-
             # Diagonal terms of the covariance matrix
             self.varF = (self.A*self.sigF)**2 +\
                  (self.magnification(self.t)*self.B)**2
@@ -256,7 +260,7 @@ class SingleLensModel(pm.Model):
         """
         def solve_for_invgamma_params(params, x_min, x_max):
             """
-            Returns parameters of an inverse gamma distribution p(x) such that 
+            Returns parameters of an inverse zeta distribution p(x) such that 
             0.1% of total prob. mass is assigned to values of x < x_min and 
             1% of total prob. masss  to values greater than x_max.
             """
@@ -291,28 +295,19 @@ class SingleLensModel(pm.Model):
             beta = T._shared(invgamma_b)*T.ones((self.n_bands, 1)),
             testval=2.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
-
-        # Save log prior for each parameter, this is needed for hierarchical
-        # modeling of multiple events using the importance resampling trick
-        self.logp_sigma = pm.Deterministic('logp_sigma',
-            self.BoundedNormal.dist(
-                mu=T.zeros((self.n_bands, 1)),
-                sd=3.*T.ones((self.n_bands, 1)),
-                testval=0.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.sigma))
-        self.logp_rho = pm.Deterministic('logp_rho',
-            pm.InverseGamma.dist(
-                alpha = T._shared(invgamma_a)*T.ones((self.n_bands, 1)),
-                beta = T._shared(invgamma_b)*T.ones((self.n_bands, 1)),
-                testval=0.5*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.rho))
-
+        
     def log_likelihood(self):
         """"
         Computes the total log likelihood of the model assuming that the 
         observations in different bands are independent. The choice of 
         the likelihood function is specified when initializing the model.
         """
+        # Compute the model residuals
+        mag = self.magnification(self.t) 
+        mean_func = self.Delta_F*mag +  self.F_base 
+
+        self.r = self.F - mean_func
+
         ll = 0 
         # Iterate over all observed bands
         for i in range(self.n_bands):
@@ -399,17 +394,17 @@ class SingleLensModel(pm.Model):
                 prediction_eval[i] += xo.eval_in_model(prediction_mean, sample)
 
         # Construct list of prediction_eval
-        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
+        mask_numpy  = mask.eval().astype(bool)
+
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(prediction_eval[:, i, ~mask_numpy])
+            pred_list.append(prediction_eval[:, i, mask_numpy[i, :]])
 
         return pred_list
 
     def evaluate_prior_model_on_grid(self, trace, t_grids):
         """
-        Evaluates a posterior mean model on a dense grid given samples from a 
-        posterior distribution over the model parameters.
+        Evaluates prior model given samples from prior distribution.
         
         Parameters
         ----------
@@ -474,10 +469,11 @@ class SingleLensModel(pm.Model):
                 prediction_eval[i] += xo.eval_in_model(prediction_mean, sample)
 
         # Construct list of prediction_eval
-        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
+        mask_numpy  = mask.eval().astype(bool)
+
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(prediction_eval[:, i, ~mask_numpy])
+            pred_list.append(prediction_eval[:, i, mask_numpy[i, :]])
 
         return pred_list
 
@@ -511,7 +507,6 @@ class SingleLensModel(pm.Model):
             # Tensor which is to be evaluated in model context
             prediction = self.Delta_F*self.magnification(t_grids_tensor) +\
                 self.F_base
-
             prediction_eval = xo.eval_in_model(prediction, map_point)
 
         elif (self.kernel=='matern32'):
@@ -532,10 +527,6 @@ class SingleLensModel(pm.Model):
                 r = self.F[n] - prediction_mean_obs[n]
                 gp.log_likelihood(r)
 
-                print(type(gp.predict(t_grids[n])))
-                print(np.shape(t_grids[n]))
-                T.printing.Print('TEST')(gp.predict(t_grids[n]))
-
                 prediction_eval[n] =\
                     xo.eval_in_model(gp.predict(t_grids[n]), map_point) 
 
@@ -543,15 +534,22 @@ class SingleLensModel(pm.Model):
             prediction_eval += xo.eval_in_model(prediction_mean, map_point)
 
         # Construct list of prediction_eval
-        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
+        mask_numpy  = mask.eval().astype(bool)
+
         pred_list = []
         for i in range(self.n_bands):
-            pred_list.append(prediction_eval[i, ~mask_numpy])
+            pred_list.append(prediction_eval[i, mask_numpy[i, :]])
 
         return pred_list
 
+    def generate_mock_dataset(self):
+        """
+        Generates mock caustic.data object by sampling the prior predictive 
+        distribution.
+        """
+
     def sample(self, output_dir, n_tune=2000, n_samples=2000, 
-            target_accept=0.9):
+            target_accept=0.9, start=None):
         """
         Samples the model posterior distribution using a modified NUTS sampler
         from the 'exoplanet' package with support for dense mass matrices. 
@@ -578,6 +576,9 @@ class SingleLensModel(pm.Model):
             The step size for the leapfrog integrator in NUTS is tuned such 
             to approximate this acceptance rate. Higher values like 0.9 or 
             0.95 often work better for problematic posteriors, by default 0.9.
+        start: dict, optional
+            Initial point in the parameter space at which the tuning steps
+            start.
         """
 
         sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
@@ -588,7 +589,7 @@ class SingleLensModel(pm.Model):
 
         # Run burn-in chains             
         burnin = sampler.tune(tune=n_tune,
-                step_kwargs=dict(target_accept=target_accept))
+                step_kwargs=dict(target_accept=target_accept), start=start)
 
         # Run final sampling
         trace = sampler.sample(draws=n_samples,
@@ -603,7 +604,7 @@ class SingleLensModel(pm.Model):
         # Save output stats to file
         df = pm.summary(trace)
         df = df.round(3)
-        df.to_csv(output_dir + '/sampling_stats.csv')
+        df.to_csv(output_dir + '/sampling_stats.csv', sep=' ')
 
         # Save stats about divergent samples 
         with open(output_dir + "/divergences.txt", "w") as text_file:
@@ -695,18 +696,8 @@ class OutlierRemovalModel(SingleLensModel):
             kernel='matern32')
 
         # Initialize linear parameters
-        self.Delta_F = self.BoundedNormal('Delta_F', 
-            mu=T.zeros((self.n_bands, 1)),
-            sd=T.max(self.F)*T.ones((self.n_bands, 1)),
-            testval=T.max(self.F)*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        self.F_base = pm.Normal('F_base', 
-            mu=T.zeros((self.n_bands, 1)), 
-            sd=3.*T.ones((self.n_bands, 1)),
-            testval=T.zeros((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
+        self.initialize_linear_parameters()
+        
         # Initialize non-linear parameters
         ## Posterior is multi-modal in t0 and it's critical that the it is 
         ## initialized near the true value
@@ -718,11 +709,6 @@ class OutlierRemovalModel(SingleLensModel):
         # Deterministic transformations
         self.tE = pm.Deterministic("tE", self.teff/self.u0) 
        
-        # Compute the mean model and the residuals
-        mag = self.magnification(self.t) 
-        mean_func = self.Delta_F*mag +  self.F_base 
-        self.r = self.F - mean_func
-
         # Compute log_likelihood
         self.log_likelihood()
 
@@ -739,7 +725,6 @@ class OutlierRemovalModel(SingleLensModel):
 class PointSourcePointLens(SingleLensModel):
     """
     Standard Point Source Point Lens model. 
-    
     """
     def __init__(self, data, errorbar_rescaling='constant', 
             kernel='white_noise'):
@@ -747,17 +732,7 @@ class PointSourcePointLens(SingleLensModel):
             kernel)
         
         # Initialize linear parameters
-        self.Delta_F = self.BoundedNormal('Delta_F', 
-            mu=T.zeros((self.n_bands, 1)),
-            sd=50.*T.ones((self.n_bands, 1)),
-            testval=5.*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        self.F_base = pm.Normal('F_base', 
-            mu=T.zeros((self.n_bands, 1)), 
-            sd=0.6*T.ones((self.n_bands, 1)),
-            testval=T.zeros((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
+        self.initialize_linear_parameters() 
 
         # Initialize non-linear parameters
         ## Posterior is multi-modal in t0 and it's critical that the it is 
@@ -765,33 +740,11 @@ class PointSourcePointLens(SingleLensModel):
         self.t0 = pm.Uniform('t0', self.t_begin, self.t_end,
             testval=self.t0_guess(data))
         self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
+        #self.tE = self.BoundedNormal('tE', mu=0., sd=365., testval=20.)
         self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=20.)
         
         # Deterministic transformations
         self.tE = pm.Deterministic("tE", self.teff/self.u0) 
-
-        ## Save log prior for each parameter for hierarhical modeling 
-        self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            self.BoundedNormal.dist(
-                mu=T.zeros((self.n_bands, 1)),
-                sd=50.*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.Delta_F))
-        self.logp_F_base = pm.Deterministic('logp_F_base',
-            pm.Normal.dist(
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=0.6*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.F_base))
-        self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(self.t_begin, self.t_end).logp(self.t0))
-        self.logp_u0 = pm.Deterministic('logp_u0', 
-            self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
-        self.logp_teff = pm.Deterministic('logp_teff', 
-            self.BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
-
-        # Compute the mean model and the residuals
-        mag = self.magnification(self.t) 
-        mean_func = self.Delta_F*mag +  self.F_base 
-        self.r = self.F - mean_func
 
         # Compute log_likelihood
         self.log_likelihood()
@@ -804,7 +757,7 @@ class PointSourcePointLens(SingleLensModel):
         u = T.sqrt(self.u0**2 + ((t - self.t0)/self.tE)**2)
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
 
-        return (A(u) - 1)/(A(self.u0) - 1) 
+        return (A(u) - 1)/(A(T.abs_(self.u0)) - 1) 
     
 #    def revert_flux_params_to_nonstandardized_format(self, data):
 #        # Revert F_base and Delta_F to non-standardized units
@@ -847,17 +800,7 @@ class FiniteSourcePointLens(SingleLensModel):
             kernel)
 
         # Initialize linear parameters
-        self.Delta_F = self.BoundedNormal('Delta_F', 
-            mu=T.zeros((self.n_bands, 1)),
-            sd=50.*T.ones((self.n_bands, 1)),
-            testval=5.*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        self.F_base = pm.Normal('F_base', 
-            mu=T.zeros((self.n_bands, 1)), 
-            sd=0.6*T.ones((self.n_bands, 1)),
-            testval=T.zeros((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
+        self.initialize_linear_parameters()
 
         # Initialize non-linear parameters
         ## Posterior is multi-modal in t0 and it's critical that the it is 
@@ -869,24 +812,6 @@ class FiniteSourcePointLens(SingleLensModel):
         
         # Deterministic transformations
         self.tE = pm.Deterministic("tE", self.teff/self.u0) 
-
-        ## Save log prior for each parameter for hierarhical modeling 
-        self.logp_Delta_F = pm.Deterministic('logp_Delta_F',
-            self.BoundedNormal.dist(
-                mu=T.zeros((self.n_bands, 1)),
-                sd=50.*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.Delta_F))
-        self.logp_F_base = pm.Deterministic('logp_F_base',
-            pm.Normal.dist(
-                mu=T.zeros((self.n_bands, 1)), 
-                sd=0.6*T.ones((self.n_bands, 1)),
-                shape=(self.n_bands, 1)).logp(self.F_base))
-        self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(self.t_begin, self.t_end).logp(self.t0))
-        self.logp_u0 = pm.Deterministic('logp_u0', 
-            self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
-        self.logp_teff = pm.Deterministic('logp_teff', 
-            self.BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
         # Load FSPL table
         table = np.load('data/FSPL_table.npy')
@@ -901,17 +826,12 @@ class FiniteSourcePointLens(SingleLensModel):
         # Specify finite source parameters
         self.rho_star = self.BoundedNormal('rho_star', mu=0., sd=0.2,
             testval=0.01)
-        self.gamma_lambda = self.BoundedNormal('gamma_lambda', 
+        self.zeta_lambda = self.BoundedNormal('zeta_lambda', 
             mu=T.zeros((self.n_bands, 1)),
             sd=1.*T.ones((self.n_bands, 1)),
             testval=0.5*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
         
-        # Compute the mean function and the residuals
-        mag = self.magnification(self.t) 
-        mean_func = self.Delta_F*mag +  self.F_base 
-        self.r = self.F - mean_func
-
         # Compute the log_likelihood
         self.log_likelihood()
 
@@ -923,21 +843,22 @@ class FiniteSourcePointLens(SingleLensModel):
         u = T.sqrt(self.u0**2 + ((t - self.t0)/self.tE)**2)
 
         A = lambda u, z, B0, B1: (u**2 + 2)/(u*T.sqrt(u**2 + 4))*\
-            (B0 - self.gamma_lambda*B1)
+            (B0 - self.zeta_lambda*B1)
 
         z = u/self.rho_star
-
-        # This is incredibly inefficient
+        
+        # Inefficient hacky solution for consturcting B0 and B1 with the same
+        # shape as t and u
         B0_list = [] 
         B1_list = []
         for i in range(self.n_bands):
-            z_ = z[i].reshape((self.max_npoints, 1))
+            z_ = z[i].reshape((T.shape(t).eval()[1], 1))
             B0_list.append(self.B0_interp.evaluate(z_).T[0])
             B1_list.append(self.B1_interp.evaluate(z_).T[0])
 
         B0 = T.stack(B0_list)
         B1 = T.stack(B1_list)
-        return (A(u, z, B0, B1) - 1)/(A(self.u0, z, B0, B1) - 1) 
+        return (A(u, z, B0, B1) - 1)/(A((T.abs_(self.u0)), z, B0, B1) - 1) 
 
 class PointSourcePointLensAnnualParallax(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant', 
@@ -945,135 +866,42 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         super(PointSourcePointLensAnnualParallax, self).__init__(data,
             errorbar_rescaling, kernel)
 
-        # Load orbital data from JPL Horizons
-        start = Time(data.tables[0]['HJD'][0], format='jd')
-        stop = Time(data.tables[0]['HJD'][-1], format='jd')
-
-        epochs={'start':start.iso[:10], 'stop':stop.iso[:10], 'step':'6h'}
-        obj = Horizons(id='399', id_type='id', epochs=epochs)
-
-        elements = obj.elements()
-
-        # Calculate the projection of Eath-Sun position vector on the plane
-        # of the sky
-        coordinates_ecliptic = \
-            data.coordinates.transform_to('geocentrictrueecliptic')
-        lambda_0  = coordinates_ecliptic.lon.value*(np.pi/180)
-        beta_0  = coordinates_ecliptic.lat.value*(np.pi/180)
-
-        t = np.array(elements['datetime_jd']) # JD
-        e = np.array(elements['e'])
-        tp = np.array(elements['Tp_jd']) # JD
-        n = (2*np.pi/365.25) # mean motion
-        Phi_gamma = (77.86)*np.pi/180 # true anomaly at vernal eq. on J2000
-
-        r_sun = 1 - e*np.cos(n*(t - tp)) # to 1st order in e
-        lambda_sun = n*(t - tp) - Phi_gamma + 2*e*np.sin(n*(t - tp)) # to 1st order in e
-
-        gamma_w = r_sun*np.sin((lambda_sun - lambda_0))
-        gamma_n = r_sun*np.sin(beta_0)*np.cos(lambda_sun - lambda_0)
-
-        # Need to define an interpolator for all gamma functions for
-        points = [t] # Times for which we have JPL Horizons data
-        self.gamma_w_interp = xo.interp.RegularGridInterpolator(points, 
-            gamma_w[:, None])
-        self.gamma_n_interp = xo.interp.RegularGridInterpolator(points, 
-            gamma_n[:, None])
-
-        # Interpolate gamma functions onto the grid of observed times, this 
-        # happens only once when the model is initialized
-        n_max =  self.max_npoints
-        gamma_w = T._shared(np.stack([np.pad(
-            self.gamma_w_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
-            (0, n_max - len(table['HJD'])), 'constant', 
-            constant_values=(0.,)) for table in data.tables]))
-        gamma_n = T._shared(np.stack([np.pad(
-            self.gamma_n_interp.evaluate(np.array(table['HJD'])[:, None]).eval().ravel(),
-            (0, n_max - len(table['HJD'])), 'constant', 
-            constant_values=(0.,)) for table in data.tables]))
+        self.parametrization = parametrization
 
         # Initialize linear parameters
-        self.Delta_F = self.BoundedNormal('Delta_F', 
-            mu=T.zeros((self.n_bands, 1)),
-            sd=50.*T.ones((self.n_bands, 1)),
-            testval=5.*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
+        self.initialize_linear_parameters()
+        
+        self.t0 = pm.Uniform('t0', self.t_begin, self.t_end, 
+            testval=self.t0_guess(data))
 
-        self.F_base = pm.Normal('F_base', 
-            mu=T.zeros((self.n_bands, 1)), 
-            sd=0.6*T.ones((self.n_bands, 1)),
-            testval=T.zeros((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
+        self.u0 = pm.Normal('u0', mu=0., sd=1.5, testval=0.41)
+        self.omega_E = self.BoundedNormal('omega_E', mu=0., sd=1., 
+                testval=0.1)
+#        self.tE = self.BoundedNormal('tE', mu=0., sd=365., testval=110.)
+        self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=20.)
+        
+        # Deterministic transformations
+        self.tE = pm.Deterministic("tE", self.teff/T.abs_(self.u0)) 
+
+        self.initialize_zeta_function_interpolators(data)
 
         if (parametrization=='angle_magnitude'):
-            self.t0 = pm.Uniform('t0', self.t_begin, self.t_end, 
-                testval=self.t0_guess(data))
-            self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
-            self.omega_E = self.BoundedNormal('omega_E', mu=0., sd=1., 
-                testval=0.1)
-            self.pi_E = self.BoundedNormal('pi_E', mu=0., sd=1., testval=0.01)
+            self.pi_E = self.BoundedNormal('pi_E', mu=0., sd=1., testval=0.1)
             self.psi = xo.distributions.Angle('psi') 
 
-            mag = self.magnification(self.t, gamma_w, gamma_n, parametrization) 
-            
         elif (parametrization=='two_component'):
-            self.t0 = pm.Uniform('t0', self.t_begin, self.t_end, 
-                testval=self.t0_guess(data))
-            self.u0 = self.BoundedNormal('u0', mu=0., sd=1.5, testval=0.1)
-            self.omega_E = self.BoundedNormal('omega_E', mu=0., sd=1., 
-                testval=0.1)
-            self.pi_EW = pm.Normal('pi_EW', mu=0., sigma=1., testval=0.01)
-            self.pi_EN = pm.Normal('pi_EN', mu=0., sigma=1., testval=0.01)
-
-            mag = self.magnification(self.t, gamma_w, gamma_n, parametrization) 
+            self.pi_EE = pm.Normal('pi_EE', mu=0., sigma=1., testval=0.1)
+            self.pi_EN = pm.Normal('pi_EN', mu=0., sigma=1., testval=-0.3)
+            self.pi_E = pm.Deterministic('pi_E', T.sqrt(self.pi_EE**2 +\
+                 self.pi_EN**2))
 
         else:
-            # Compute 1st and 2nd order derivatives of the gamma vector
-            gamma_w_dot = n*((1 + e*np.cos(n*(t - tp)))*\
-                np.cos(lambda_sun - lambda_0)+\
-                e*np.sin(n*(t - tp))*np.sin(lambda_sun - lambda_0))
-            gamma_n_dot = -n*np.sin(beta_0)*((1 + e*np.cos(n*(t - tp)))\
-                *np.sin(lambda_sun - lambda_0) -\
-                e*np.sin(n*(t - tp))*np.cos(lambda_sun - lambda_0))
-
-            gamma_w_ddot = -n**2*(1 + 2*e*np.cos(n*(t - tp)))*\
-                np.sin(lambda_sun - lambda_0)
-            gamma_n_ddot = -n**2*np.sin(beta_0)*(1 + 2*e*np.cos(n*(t - tp)))*\
-                np.cos(lambda_sun - lambda_0)
-
-            # Initialize interpolators
-            self.gamma_w_dot_interp = xo.interp.RegularGridInterpolator(points, 
-                gamma_w_dot[:, None])
-            self.gamma_n_dot_interp = xo.interp.RegularGridInterpolator(points, 
-                gamma_n_dot[:, None])
-            self.gamma_w_ddot_interp = xo.interp.RegularGridInterpolator(points, 
-                gamma_w_ddot[:, None])
-            self.gamma_n_ddot_interp = xo.interp.RegularGridInterpolator(points, 
-                gamma_n_ddot[:, None])
-
             # Acceleration parameters
     #        self.a_par = pm.Exponential('a_par', lam=10, testval=0.01)
     #        self.a_vert = pm.Exponential('a_vert', lam=10, testval=0.01)
 
             self.a_par = pm.Normal('a_par', mu=0, sd=0.1, testval=0.01)
-            self.kappa_0 = pm.Normal('kappa_0', mu=0, sd=0.1, testval=0.01)
-            self.t0_prime = pm.Uniform('t0_prime', self.t_begin, self.t_end,
-                testval=self.t0_guess(data))
-            self.u0_prime = pm.Normal('u0_prime', mu=0., sd=1., testval=0.05)
-            self.v0_prime = pm.Normal('v0_prime', mu=0., sd=1., testval=0.05)
-
-            # Compute the magnification
-            self.t_E = 0.
-            self.pi_E = 0.
-            mag = self.magnification_3(self.t, gamma_w, gamma_n) 
-
-            # Save t_E, and pi_E parameters to trace
-            pm.Deterministic('t_E', self.t_E)
-            pm.Deterministic('pi_E', self.pi_E)
-
-        # Compute the mean function and the residuals
-        mean_func = self.Delta_F*mag +  self.F_base 
-        self.r = self.F - mean_func
+            self.a_per = pm.Normal('a_per', mu=0, sd=0.1, testval=0.01)
 
         # Compute the log_likelihood
         self.log_likelihood()
@@ -1081,179 +909,206 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         # Define helpful class attributes
         self.free_parameters = [RV.name for RV in self.basic_RVs]
         self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
-
-    def compute_u_1(self, t, gamma_w, gamma_n):
-        psi = self.psi + np.pi
-        u_w = -self.u0*T.sin(psi) - self.omega_E*(t - self.t0)*T.cos(psi) +\
-            self.pi_E*gamma_w
-        u_n = self.u0*T.cos(psi) - self.omega_E*(t - self.t0)*T.sin(psi) +\
-            self.pi_E*gamma_n
-
-        return T.sqrt(u_w**2 + u_n**2)
-
-    def compute_u_2(self, t, gamma_w, gamma_n):
-        u_w = -self.omega_E*(t - self.t0) + self.pi_EW*gamma_w +\
-             self.pi_EN*gamma_n
-        u_n = self.u0 + self.pi_EW*gamma_n - self.pi_EN*gamma_w
-
-        return T.sqrt(u_w**2 + u_n**2)
-
-    def compute_u_3(self, t, gamma_w, gamma_n):
-        # Parallax parameters
-        gamma_w_t0 = self.gamma_w_interp.evaluate(\
-            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0] 
-        gamma_n_t0 = self.gamma_n_interp.evaluate(\
-            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
-        gamma_w_dot_t0 = self.gamma_w_dot_interp.evaluate(\
-            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
-        gamma_n_dot_t0 = self.gamma_n_dot_interp.evaluate(\
-            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
-        gamma_w_ddot_t0 = self.gamma_w_ddot_interp.evaluate(\
-            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
-        gamma_n_ddot_t0 = self.gamma_n_ddot_interp.evaluate(\
-            T.reshape(self.t0_prime + 2450000, (1, 1)))[0, 0]
-
-        a_vert = self.kappa_0 - self.v0_prime**2/self.u0_prime**2
-
-        # Compute u(t)
-        pi_E = T.sqrt((self.a_par**2 +\
-             a_vert**2)/(gamma_w_ddot_t0**2 + gamma_n_ddot_t0**2))
-
-        sin_phi = pi_E*(a_vert*gamma_w_ddot_t0 -\
-             self.a_par*gamma_n_ddot_t0)/(self.a_par**2 + a_vert**2)
-
-        cos_phi = pi_E*(a_vert*gamma_n_ddot_t0 +\
-             self.a_par*gamma_w_ddot_t0)/(self.a_par**2 + a_vert**2)
-
-        u_w = self.u0_prime*sin_phi + pi_E*(gamma_w - gamma_w_t0) +\
-            (self.v0_prime*cos_phi - pi_E*gamma_w_dot_t0)*(t - self.t0_prime)
-        u_n = self.u0_prime*cos_phi + pi_E*(gamma_n - gamma_n_t0) +\
-            (-self.v0_prime*sin_phi - pi_E*gamma_n_dot_t0)*(t - self.t0_prime)
-
-        # Deterministic transform
-        t_E =  1/T.sqrt(self.v0_prime*2 -\
-            2*self.v0_prime*pi_E*(gamma_w_dot_t0*cos_phi - gamma_n_dot_t0*sin_phi)\
-                + pi_E**2*(gamma_w_dot_t0**2 + gamma_n_dot_t0**2))
+    
+    def project_vector_onto_sky(self, matrix, coordinates):
+        """
+        This function takes a 3D cartesian vector specified
+        in the ICRS coordinate system and evaluated at differrent
+        times (t_i,...t_N) and projects it onto a spherical coordinate
+        system on the plane of the sky with the origin at the position
+        defined by the coordinates.
         
-        self.t_E = t_E
-        self.pi_E = pi_E
+        Parameters
+        ----------
+        matrix : ndarray
+            Matrix of shape (times_len, 3)
+        coordinates : astropy.coordinates.SkyCoord
+            Coordinates on the sky.
+        """
 
-        return T.sqrt(u_w**2 + u_n**2)  
+        # Vector normal to the plane of the sky in ICRS coordiantes
+        direction = np.array(coordinates.cartesian.xyz.value)
+        
+        # Unit vector pointing north in ICRS coordinates
+        e_north = np.array([0., 0., 1.])
 
-    def magnification(self, t, gamma_w, gamma_n, parametrization):
-        if (parametrization=='angle_magnitude'):
-            A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-            u = self.compute_u_1(t, gamma_w, gamma_n)
-            return (A(u) - 1)/(A(self.u0) - 1) 
+        # Sperical unit vectors of the coordinate system defined
+        # on the plane of the sky which is perpendicular to the
+        # source star direction
+        e_east_sky = np.cross(e_north, direction)
+        e_east_sky /= np.linalg.norm(e_east_sky)
 
-        elif (parametrization=='two_component'):
-            A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-            u = self.compute_u_2(t, gamma_w, gamma_n)
-            return (A(u) - 1)/(A(self.u0) - 1) 
+        e_north_sky = np.cross(direction, e_east_sky)
+
+        east_component  = np.dot(matrix, e_east_sky)
+        north_component = np.dot(matrix, e_north_sky)
+        
+        return east_component, north_component
+
+    def initialize_zeta_function_interpolators(self, data):
+        """
+        This function takes a `caustic.data` object, calls NASA's JPL Horizons
+        to calculate the Earth's orbital elements for each of the observed 
+        times. It then computes the projection of the Earth--Sun separation
+        vector onto the plane of the sky and its derivatives. It then initializes 
+        `exoplanet.interp.RegularGridInterpolator` objects as class attributes.
+        These interpolators are used to evaluate the zeta function and its
+        derivatives at arbitrary times and they are used in the likelihood 
+        computation.
+        
+        Parameters
+        ----------
+        data : caustic.data
+            Caustic data object.
+        """
+        t = np.linspace(self.t_begin, self.t_end, 5000) + 2450000
+        times = Time(t, format='jd', scale='tdb')
+
+        # Get Earth's position and velocity from JPL Horizons
+        pos, vel = get_body_barycentric_posvel('earth', times)
+
+        # Minus sign is because get_body_barycentric returns Earth position
+        # in heliocentric coordinates 
+        s_t = -pos.xyz.value.T
+        v_t = -vel.xyz.value.T
+
+        zeta_e, zeta_n = self.project_vector_onto_sky(s_t, data.coordinates)
+        zeta_e_dot, zeta_n_dot = self.project_vector_onto_sky(v_t, 
+            data.coordinates)
+
+        # Define interpolator objects for the zeta function and its derivatives
+        points = [t - 2450000]  # Times used for interpolation
+        self.zeta_e_interp = xo.interp.RegularGridInterpolator(points, 
+            zeta_e[:, None])
+        self.zeta_n_interp= xo.interp.RegularGridInterpolator(points, 
+            zeta_n[:, None])
+        self.zeta_e_dot_interp = xo.interp.RegularGridInterpolator(points, 
+            zeta_e_dot[:, None])
+        self.zeta_n_dot_interp = xo.interp.RegularGridInterpolator(points, 
+            zeta_n_dot[:, None])
+#        self.zeta_e_ddot_interp = xo.interp.RegularGridInterpolator(points, 
+#            zeta_e_ddot(t)[:, None])
+#        self.zeta_n_ddot_interp = xo.interp.RegularGridInterpolator(points, 
+#            zeta_n_ddot(t)[:, None])
+
+    def compute_u(self, t, delta_zeta_e, delta_zeta_n):
+        """
+        Computes the magnitude of the relative lens-source separatin vector
+        u(t). The parametrization used is specified by the 
+        `self.parametrization` property.
+        
+        Parameters
+        ----------
+        t : theano.tensor
+            Tensor containing times for which u(t) is to be computed. Needs 
+            to have shape (n_bands, max_npoints)
+        delta_zeta_e : theano.tensor
+            East component of delta_zeta(t). Same shape as t.
+        delta_zeta_n : theano.tensor
+            East component of delta_zeta(t). Same shape as t.
+        
+        Returns
+        -------
+        theano.tensor
+            The magnitude of the separation vector u(t) for each time.
+        """
+        if (self.parametrization=='angle_magnitude'):
+            #psi = self.psi + np.pi
+            u_par = (t - self.t0)*self.omega_E + self.pi_E*T.cos(self.psi)*\
+                delta_zeta_e - self.pi_E*T.sin(self.psi)*delta_zeta_n
+            u_per = self.u0 + self.pi_E*T.sin(self.psi)*\
+                delta_zeta_e + self.pi_E*T.cos(self.psi)*delta_zeta_n
+
+            return T.sqrt(u_par**2 + u_per**2)
+
+        elif (self.parametrization=='two_component'):
+#            u_par = self.omega_E*(t - self.t0) + self.pi_EE*delta_zeta_e +\
+#                - self.pi_EN*delta_zeta_n
+#            u_per = self.u0 + self.pi_EN*delta_zeta_e + self.pi_EE*delta_zeta_n
+#
+            # Classic version
+            u_par = (t - self.t0)/self.tE + self.pi_EE*delta_zeta_e +\
+                self.pi_EN*delta_zeta_n
+            u_per = self.u0 + self.pi_EN*delta_zeta_e - self.pi_EE*delta_zeta_n
+
+            return T.sqrt(u_par**2 + u_per**2)
 
         else:
-            A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-            u = self.compute_u_3(t, gamma_w, gamma_n)
-            return (A(u) - 1)/(A(self.u0_prime) - 1) 
-    
-    def evaluate_posterior_model_on_grid(self, trace, t_grids, n_samples=50):
-        n_max =  np.max([len(t_grid) for t_grid in t_grids])
-        prediction_eval = np.zeros((n_samples, self.n_bands, n_max))
+            # Parallax parameters
+            delta_zeta_e_ddot_t0 = self.zeta_e_ddot_interp.evaluate(\
+                T.reshape(self.t0 + 2450000, (1, 1)))[0, 0]
+            delta_zeta_n_ddot_t0 = self.zeta_n_ddot_interp.evaluate(\
+                T.reshape(self.t0 + 2450000, (1, 1)))[0, 0]
 
-        # Construct tensors needed to evaluate the model 
-        t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
+            # Compute u(t)
+            piE_cospsi = (self.a_par*delta_zeta_e_ddot_t0 +\
+                self.a_per*delta_zeta_n_ddot_t0)/(delta_zeta_e_ddot_t0**2 +\
+                    delta_zeta_n_ddot_t0**2)
+            piE_sinpsi = (self.a_per*delta_zeta_e_ddot_t0 -\
+                self.a_par*delta_zeta_n_ddot_t0)/(delta_zeta_e_ddot_t0**2 +\
+                    delta_zeta_n_ddot_t0**2)
 
-        gamma_w, _ = self.construct_masked_tensor(
-            [self.gamma_w_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
-                for t_grid in t_grids])
+            u_par = (t - self.t0)*self.omega_E + piE_cospsi*\
+                delta_zeta_e - piE_sinpsi*delta_zeta_n
+            u_per = self.u0 + piE_sinpsi*\
+                delta_zeta_e + piE_cospsi*delta_zeta_n
 
-        gamma_n, _ = self.construct_masked_tensor(
-            [self.gamma_n_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
-                for t_grid in t_grids])
+            return T.sqrt(u_par**2 + u_per**2)  
 
-        # Evaluate model for each sample
-        for i, sample in enumerate(xo.get_samples_from_trace(trace, 
-                size=n_samples)):
-            # Tensor which is to be evaluated in model context
-            prediction = self.Delta_F*self.magnification(t_grids_tensor, 
-                gamma_w, gamma_n) + self.F_base
+    def magnification(self, t):
+        """
+        Computes the magnification fraction [A(u) - 1]/[A(u0) - 1]
+        where A(u) is the magnification function.
+        
+        Parameters
+        ----------
+        t : theano.tensor
+            Tensor containing times for which A(t) is to be computed. Needs 
+            to have shape (n_bands, max_npoints)
+        
+        Returns
+        -------
+        theano.tensor
+            The value of the magnification at each time t.
+        """
+        zeta_e_list = []
+        zeta_n_list = []
 
-            prediction_eval[i] = xo.eval_in_model(prediction, sample)
+        for idx in range(self.n_bands):
+            # the interpolation function requires tensor of shape (n_points, 1)
+            # as an input 
+            pts = T.reshape(t[idx], (T.shape(t[idx])[0], 1))
+            zeta_e_list.append(self.zeta_e_interp.evaluate(pts).transpose())
+            zeta_n_list.append(self.zeta_n_interp.evaluate(pts).transpose())
 
-        # Construct list of prediction_eval
-        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
-        pred_list = []
-        for i in range(self.n_bands):
-            pred_list.append(prediction_eval[:, i, ~mask_numpy])
+        # Stack interpolated functions such that they have the same shape as
+        # self.t, namely, (n_bands, max_npoints)
+        zeta_e = T.concatenate(zeta_e_list, axis=1)
+        zeta_n = T.concatenate(zeta_n_list, axis=1)
 
-        return pred_list
+        zeta_e_t0 = self.zeta_e_interp.evaluate(T.reshape(self.t0,
+             (1, 1)))[0, 0]
+        zeta_n_t0 = self.zeta_n_interp.evaluate(T.reshape(self.t0,
+             (1, 1)))[0, 0]
+        zeta_e_dot_t0 = self.zeta_e_dot_interp.evaluate(T.reshape(self.t0,
+            (1, 1)))[0, 0]
+        zeta_n_dot_t0 = self.zeta_n_dot_interp.evaluate(T.reshape(self.t0,
+            (1, 1)))[0, 0]
+#        zeta_e_ddot_t0 = self.zeta_e_ddot_interp.evaluate(T.reshape(self.t0,
+#            (1, 1)))[0, 0]
+#        zeta_n_ddot_t0 = self.zeta_n_ddot_interp.evaluate(T.reshape(self.t0,
+#            (1, 1)))[0, 0]
 
-    def evaluate_prior_model_on_grid(self, trace, t_grids):
-        n_samples = len(np.atleast_1d(trace['t0_prime']))
-        n_max =  np.max([len(t_grid) for t_grid in t_grids])
-        prediction_eval = np.zeros((n_samples, self.n_bands, n_max))
+        # Compute delta_zeta function 
+        delta_zeta_e = zeta_e - zeta_e_t0 -\
+             (t - self.t0)*zeta_e_dot_t0
+        delta_zeta_n = zeta_n - zeta_n_t0 -\
+             (t - self.t0)*zeta_n_dot_t0
 
-        # Construct tensors needed to evaluate the model 
-        t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
+        A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
+        u = self.compute_u(t, delta_zeta_e, delta_zeta_n)
 
-        gamma_w, _ = self.construct_masked_tensor(
-            [self.gamma_w_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
-                for t_grid in t_grids])
-
-        gamma_n, _ = self.construct_masked_tensor(
-            [self.gamma_n_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
-                for t_grid in t_grids])
-
-        # Evaluate model for each sample
-        for i in range(n_samples):
-            # Tensor which is to be evaluated in model context
-            prediction = self.Delta_F*self.magnification(t_grids_tensor, 
-                gamma_w, gamma_n) + self.F_base
-
-            if (n_samples==1):
-                sample = {key:trace[key] for key in trace.keys()}
-            else:
-                sample = {key:trace[key][i] for key in trace.keys()}
-
-            prediction_eval[i] = xo.eval_in_model(prediction, sample)
-
-        # Construct list of prediction_eval
-        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
-        pred_list = []
-        for i in range(self.n_bands):
-            pred_list.append(prediction_eval[:, i, ~mask_numpy])
-
-        return pred_list
-
-    def evaluate_map_model_on_grid(self, t_grids, map_point):
-        n_max =  np.max([len(t_grid) for t_grid in t_grids])
-        prediction_eval = np.zeros((self.n_bands, n_max))
-
-        # Construct tensors needed to evaluate the model
-        t_grids_tensor, mask = self.construct_masked_tensor(t_grids)
-
-        gamma_w, _ = self.construct_masked_tensor(
-            [self.gamma_w_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
-                for t_grid in t_grids])
-
-        gamma_n, _ = self.construct_masked_tensor(
-            [self.gamma_n_interp.evaluate(t_grid[:, None] + 2450000).eval().ravel()\
-                for t_grid in t_grids])
-
- 
-        # Tensor which is to be evaluated in model context
-        prediction = self.Delta_F*self.magnification(t_grids_tensor, gamma_w,
-            gamma_n) + self.F_base
-            
-        prediction_eval = xo.eval_in_model(prediction, map_point)
-
-        # Construct list of prediction_eval
-        mask_numpy  = mask.nonzero()[0].eval().astype(bool)
-        pred_list = []
-        for i in range(self.n_bands):
-            pred_list.append(prediction_eval[i, ~mask_numpy])
-
-        return pred_list
+        return (A(u) - 1)/(A(T.abs_(self.u0)) - 1) 
 
 class PointSourcePointLensMarginalized(SingleLensModel):
     def __init__(self, data, errorbar_rescaling='constant'):
@@ -1269,14 +1124,6 @@ class PointSourcePointLensMarginalized(SingleLensModel):
         
         # Deterministic transformations
         self.tE = pm.Deterministic("tE", self.teff/self.u0) 
-
-        ## Save log prior for each parameter for hierarhical modeling 
-        self.logp_t0 = pm.Deterministic('logp_t0',
-            pm.Uniform.dist(self.t_begin, self.t_end).logp(self.t0))
-        self.logp_u0 = pm.Deterministic('logp_u0', 
-            self.BoundedNormal.dist(mu=0., sd=1.5).logp(self.u0))
-        self.logp_teff = pm.Deterministic('logp_teff', 
-            self.BoundedNormal.dist(mu=0., sd=365.).logp(self.teff))
 
         # Compute the likelihood function
         self.mag = self.magnification(self.t) 
