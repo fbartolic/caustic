@@ -10,7 +10,7 @@ from astropy.table import Table
 
 class Data(object):
     """
-    Abstract base class for microlensing data from various observatories. 
+    Base class for microlensing data from various observatories. 
     Subclasses should overload the :func:`Data.load_data`. The time series
     data is stored as a list of Astropy tables, one for each photometric filter.
     """
@@ -301,9 +301,18 @@ class OGLEData(Data):
 
     def load_data(self, event_dir):
         """Returns a table with raw data."""
-        t = Table.read(event_dir + '/phot.dat', format='ascii', 
-            names=('HJD', 'mag', 'mag_err', 'col4', 'col5'))
+        t = Table.read(event_dir + '/phot.dat', format='ascii')
+
+        # Remove additional columns
+        t.columns[0].name = 'HJD'
+        t.columns[1].name = 'mag'
+        t.columns[2].name = 'mag_err'
         t.keep_columns(('HJD', 'mag', 'mag_err'))
+
+        # Add 2450000 if necessary
+        if(t['HJD'][0] < 2450000):
+            t['HJD'] += 2450000
+
         t.meta = {'filter':'I', 'observatory':'OGLE'}
         self.tables.append(t)
         self.masks = [np.ones(len(t['HJD']), dtype=bool)]
@@ -396,7 +405,6 @@ class KMTData(Data):
 
 class NASAExoArchiveData(Data):
     """Subclass of data class for dealing with data from NASA Exo Archive."""
-    """Subclass of data class for dealing with OGLE data."""
     def __init__(self, event_dir):
         super(NASAExoArchiveData, self).__init__(event_dir)
         self.load_data(event_dir)

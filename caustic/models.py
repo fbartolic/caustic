@@ -547,8 +547,9 @@ class SingleLensModel(pm.Model):
         Generates mock caustic.data object by sampling the prior predictive 
         distribution.
         """
+        raise NotImplementedError()
 
-    def sample(self, output_dir, n_tune=2000, n_samples=2000, 
+    def sample(self, output_dir=None, n_tune=2000, n_samples=2000, 
             target_accept=0.9, start=None):
         """
         Samples the model posterior distribution using a modified NUTS sampler
@@ -566,7 +567,8 @@ class SingleLensModel(pm.Model):
         ----------
         output_dir : str
             Path to directory where the trace is to be saved, together with
-            various diagnostic plots and information.
+            various diagnostic plots and information. If it is not defined 
+            nothing will be saved.
         n_tune : int, optional
             Number of tuning steps, by default 2000
         n_samples : int, optional
@@ -579,13 +581,24 @@ class SingleLensModel(pm.Model):
         start: dict, optional
             Initial point in the parameter space at which the tuning steps
             start.
+
+        Returns
+        -------
+        PyMC3 MultiTrace object
+            Trace object containing the posterior samples.
         """
 
         sampler = xo.PyMC3Sampler(window=100, start=200, finish=200)
 
-        print("Free parameters:\n", self.free_parameters)
-        print("Initial values of logp for each parameter:\n", 
-            self.initial_logps)
+        # Print the names of the free parameters and the inital values
+        # of their log-priors        
+        free_parameters = [RV.name for RV in self.basic_RVs]
+        initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+        if np.any(np.isnan(initial_logps))==True:
+            print("Prior distributions misspecified, check that the test\
+                values are within the bounds of the prior.")
+
+        print("Free parameters:\n", free_parameters)
 
         # Run burn-in chains             
         burnin = sampler.tune(tune=n_tune,
@@ -595,32 +608,33 @@ class SingleLensModel(pm.Model):
         trace = sampler.sample(draws=n_samples,
                 step_kwargs=dict(target_accept=target_accept))
 
-        # Save trace as a MultiTrace object and a csv
-        pm.save_trace(trace, output_dir + '/model.trace',
-            overwrite=True)
-        df = pm.trace_to_dataframe(trace) 
-        df.to_csv(output_dir + '/trace.csv',)
-        
-        # Save output stats to file
-        df = pm.summary(trace)
-        df = df.round(3)
-        df.to_csv(output_dir + '/sampling_stats.csv', sep=' ')
+        # Save sampling output to files
+        if (output_dir is not None):
+            pm.save_trace(trace, output_dir + '/model.trace',
+                overwrite=True)
+            df = pm.trace_to_dataframe(trace) 
+            df.to_csv(output_dir + '/trace.csv',)
+            
+            # Save output stats to file
+            df = pm.summary(trace)
+            df = df.round(3)
+            df.to_csv(output_dir + '/sampling_stats.csv', sep=' ')
 
-        # Save stats about divergent samples 
-        with open(output_dir + "/divergences.txt", "w") as text_file:
-            divergent = trace['diverging']
-            print(f'Number of Divergent %d' % divergent.nonzero()[0].size,
-                    file=text_file)
-            divperc = divergent.nonzero()[0].size / len(trace) * 100
-            print(f'Percentage of Divergent %.1f' % divperc, file=text_file)
+            # Save stats about divergent samples 
+            with open(output_dir + "/divergences.txt", "w") as text_file:
+                divergent = trace['diverging']
+                print(f'Number of Divergent %d' % divergent.nonzero()[0].size,
+                        file=text_file)
+                divperc = divergent.nonzero()[0].size / len(trace) * 100
+                print(f'Percentage of Divergent %.1f' % divperc, file=text_file)
 
-        # Save traceplots
-        _ = pm.traceplot(trace)
-        plt.savefig(output_dir + '/traceplots.png')
+            # Save traceplots
+            _ = pm.traceplot(trace)
+            plt.savefig(output_dir + '/traceplots.png')
 
         return trace
 
-    def sample_with_emcee(self, output_dir, n_walkers=50, n_samples=10000):
+    def sample_with_emcee(self, output_dir=None, n_walkers=50, n_samples=10000):
         """
         Samples the model posterior distribution using emcee.
                 
@@ -628,16 +642,29 @@ class SingleLensModel(pm.Model):
         ----------
         output_dir : str
             Path to directory where the trace is to be saved, together with
-            various diagnostic plots and information.
+            various diagnostic plots and information. If it is not defined 
+            nothing will be saved.
         n_walkers: int, optional
             Number of walkers, by default 50.
         n_samples : int, optional
             Number of sampling steps, by default 10000.
-        """
-        print("Free parameters:\n", self.free_parameters)
-        print("Initial values of logp for each parameter:\n", 
-            self.initial_logps)
 
+        Returns
+        -------
+        ndarray
+            Chain containing posterior samples of shape 
+        """
+        # Print the names of the free parameters and the inital values
+        # of their log-priors        
+        free_parameters = [RV.name for RV in self.basic_RVs]
+        initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+        if np.any(np.isnan(initial_logps))==True:
+            print("Prior distributions misspecified, check that the test\
+                values are within the bounds of the prior.")
+
+        print("Free parameters:\n", free_parameters)
+
+        # DFM's hack for using emcee with PyMC3 models
         f = theano.function(self.vars, [self.logpt] + self.deterministics)
     
         def log_prob_func(params):
@@ -660,31 +687,33 @@ class SingleLensModel(pm.Model):
             blobs_dtype=dtype)
         sampler.run_mcmc(coords, n_samples, progress=True)
 
-        # Save sampling stats
-        with open(output_dir + "/sampling_stats_emcee.txt", "w") as text_file:
+        # Save sampling output to file
+        if (output_dir is not None):
+            # Save sampling stats
+            with open(output_dir + "/sampling_stats_emcee.txt", "w") as text_file:
+                for i, param in enumerate(self.free_parameters):
+                    mean = np.mean(sampler.flatchain[:, i])
+                    std = np.std(sampler.flatchain[:, i])
+                    print(f"parameter, mean, std", file=text_file)
+                    print(f"{param}, {mean}, {std}", file=text_file)
+
+            # Save trace to file
+            np.save(output_dir + '/trace_emcee.npy', sampler.chain)
+
+            # Save traceplots to file
+            fig, ax = plt.subplots(ndim, 1)
             for i, param in enumerate(self.free_parameters):
-                mean = np.mean(sampler.flatchain[:, i])
-                std = np.std(sampler.flatchain[:, i])
-                print(f"parameter, mean, std", file=text_file)
-                print(f"{param}, {mean}, {std}", file=text_file)
+                mask = sampler.acceptance_fraction > .08
+                ax[i].plot(sampler.chain[mask, ::10, i].T, 'k-', alpha=0.2);
+                ax[i].set_ylabel(param)
 
-        # Save trace to file
-        np.save(output_dir + '/trace_emcee.npy', sampler.chain)
+            plt.savefig(output_dir + '/traceplots_emcee.png', bbox_inches='tight')
 
-        # Save traceplots to file
-        fig, ax = plt.subplots(ndim, 1)
-        for i, param in enumerate(self.free_parameters):
-            mask = sampler.acceptance_fraction > .08
-            ax[i].plot(sampler.chain[mask, ::10, i].T, 'k-', alpha=0.2);
-            ax[i].set_ylabel(param)
-
-        plt.savefig(output_dir + '/traceplots_emcee.png', bbox_inches='tight')
-
-        # Save corner plot
-        figure = corner.corner(sampler.flatchain[2000:, :], 
-            quantiles=[0.16, 0.5, 0.84], 
-            show_titles=True, labels=self.free_parameters)
-        plt.savefig(output_dir + '/corner_emcee.png', bbox_inches='tight')
+            # Save corner plot
+            figure = corner.corner(sampler.flatchain[2000:, :], 
+                quantiles=[0.16, 0.5, 0.84], 
+                show_titles=True, labels=self.free_parameters)
+            plt.savefig(output_dir + '/corner_emcee.png', bbox_inches='tight')
 
         return sampler.chain
 
@@ -874,14 +903,15 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         self.t0 = pm.Uniform('t0', self.t_begin, self.t_end, 
             testval=self.t0_guess(data))
 
-        self.u0 = pm.Normal('u0', mu=0., sd=1.5, testval=0.41)
-        self.omega_E = self.BoundedNormal('omega_E', mu=0., sd=1., 
-                testval=0.1)
+        self.u0 = pm.Normal('u0', mu=0., sd=1.5, testval=-0.41)
+#        self.omega_E = self.BoundedNormal('omegaE', mu=0., sd=1., 
+#                testval=0.1)
 #        self.tE = self.BoundedNormal('tE', mu=0., sd=365., testval=110.)
         self.teff = self.BoundedNormal('teff', mu=0., sd=365., testval=20.)
         
         # Deterministic transformations
         self.tE = pm.Deterministic("tE", self.teff/T.abs_(self.u0)) 
+#        self.tE = pm.Deterministic("tE", 1/self.omega_E) 
 
         self.initialize_zeta_function_interpolators(data)
 
@@ -900,15 +930,16 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
     #        self.a_par = pm.Exponential('a_par', lam=10, testval=0.01)
     #        self.a_vert = pm.Exponential('a_vert', lam=10, testval=0.01)
 
-            self.a_par = pm.Normal('a_par', mu=0, sd=0.1, testval=0.01)
-            self.a_per = pm.Normal('a_per', mu=0, sd=0.1, testval=0.01)
+            self.a_per = pm.Normal('a_per', mu=0, sd=0.001, testval=0.0)
+            self.a_par = pm.Normal('a_par', mu=0, sd=0.001, testval=0.0)
+
+            self.pi_E = pm.Deterministic('pi_E', 0.)
 
         # Compute the log_likelihood
         self.log_likelihood()
 
-        # Define helpful class attributes
-        self.free_parameters = [RV.name for RV in self.basic_RVs]
-        self.initial_logps = [RV.logp(self.test_point) for RV in self.basic_RVs]
+        # Store the value of the log-posterior as a deterministic RV
+        pm.Deterministic('log_posterior', self.logpt)
     
     def project_vector_onto_sky(self, matrix, coordinates):
         """
@@ -926,8 +957,9 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             Coordinates on the sky.
         """
 
-        # Vector normal to the plane of the sky in ICRS coordiantes
+        # Unit vector normal to the plane of the sky in ICRS coordiantes
         direction = np.array(coordinates.cartesian.xyz.value)
+        direction /= np.linalg.norm(direction)
         
         # Unit vector pointing north in ICRS coordinates
         e_north = np.array([0., 0., 1.])
@@ -936,8 +968,6 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         # on the plane of the sky which is perpendicular to the
         # source star direction
         e_east_sky = np.cross(e_north, direction)
-        e_east_sky /= np.linalg.norm(e_east_sky)
-
         e_north_sky = np.cross(direction, e_east_sky)
 
         east_component  = np.dot(matrix, e_east_sky)
@@ -972,8 +1002,15 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         s_t = -pos.xyz.value.T
         v_t = -vel.xyz.value.T
 
+        # Acceleration is not provided by the astropy function so we compute
+        # the derivative numerically
+        a_t = np.gradient(v_t, axis=0)
+
+        # Project vectors onto the plane of the sky
         zeta_e, zeta_n = self.project_vector_onto_sky(s_t, data.coordinates)
         zeta_e_dot, zeta_n_dot = self.project_vector_onto_sky(v_t, 
+            data.coordinates)
+        zeta_e_ddot, zeta_n_ddot = self.project_vector_onto_sky(a_t, 
             data.coordinates)
 
         # Define interpolator objects for the zeta function and its derivatives
@@ -986,10 +1023,10 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             zeta_e_dot[:, None])
         self.zeta_n_dot_interp = xo.interp.RegularGridInterpolator(points, 
             zeta_n_dot[:, None])
-#        self.zeta_e_ddot_interp = xo.interp.RegularGridInterpolator(points, 
-#            zeta_e_ddot(t)[:, None])
-#        self.zeta_n_ddot_interp = xo.interp.RegularGridInterpolator(points, 
-#            zeta_n_ddot(t)[:, None])
+        self.zeta_e_ddot_interp = xo.interp.RegularGridInterpolator(points, 
+            zeta_e_ddot[:, None])
+        self.zeta_n_ddot_interp = xo.interp.RegularGridInterpolator(points, 
+            zeta_n_ddot[:, None])
 
     def compute_u(self, t, delta_zeta_e, delta_zeta_n):
         """
@@ -1014,45 +1051,44 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         """
         if (self.parametrization=='angle_magnitude'):
             #psi = self.psi + np.pi
-            u_par = (t - self.t0)*self.omega_E + self.pi_E*T.cos(self.psi)*\
+            u_per = self.u0 + self.pi_E*T.cos(self.psi)*\
                 delta_zeta_e - self.pi_E*T.sin(self.psi)*delta_zeta_n
-            u_per = self.u0 + self.pi_E*T.sin(self.psi)*\
+            u_par = (t - self.t0)*self.omega_E + self.pi_E*T.sin(self.psi)*\
                 delta_zeta_e + self.pi_E*T.cos(self.psi)*delta_zeta_n
 
             return T.sqrt(u_par**2 + u_per**2)
 
         elif (self.parametrization=='two_component'):
-#            u_par = self.omega_E*(t - self.t0) + self.pi_EE*delta_zeta_e +\
-#                - self.pi_EN*delta_zeta_n
-#            u_per = self.u0 + self.pi_EN*delta_zeta_e + self.pi_EE*delta_zeta_n
-#
-            # Classic version
+            u_per = self.u0 + self.pi_EN*delta_zeta_e - self.pi_EE*delta_zeta_n
             u_par = (t - self.t0)/self.tE + self.pi_EE*delta_zeta_e +\
                 self.pi_EN*delta_zeta_n
-            u_per = self.u0 + self.pi_EN*delta_zeta_e - self.pi_EE*delta_zeta_n
 
             return T.sqrt(u_par**2 + u_per**2)
 
         else:
             # Parallax parameters
             delta_zeta_e_ddot_t0 = self.zeta_e_ddot_interp.evaluate(\
-                T.reshape(self.t0 + 2450000, (1, 1)))[0, 0]
+                T.reshape(self.t0, (1, 1)))[0, 0]
             delta_zeta_n_ddot_t0 = self.zeta_n_ddot_interp.evaluate(\
-                T.reshape(self.t0 + 2450000, (1, 1)))[0, 0]
+                T.reshape(self.t0, (1, 1)))[0, 0]
 
             # Compute u(t)
-            piE_cospsi = (self.a_par*delta_zeta_e_ddot_t0 +\
+            piE_cospsi = (self.a_par*delta_zeta_n_ddot_t0 +\
+                self.a_per*delta_zeta_e_ddot_t0)/(delta_zeta_e_ddot_t0**2 +\
+                    delta_zeta_n_ddot_t0**2)
+            piE_sinpsi = (self.a_par*delta_zeta_e_ddot_t0 -\
                 self.a_per*delta_zeta_n_ddot_t0)/(delta_zeta_e_ddot_t0**2 +\
                     delta_zeta_n_ddot_t0**2)
-            piE_sinpsi = (self.a_per*delta_zeta_e_ddot_t0 -\
-                self.a_par*delta_zeta_n_ddot_t0)/(delta_zeta_e_ddot_t0**2 +\
-                    delta_zeta_n_ddot_t0**2)
 
-            u_par = (t - self.t0)*self.omega_E + piE_cospsi*\
+            u_per = self.u0 + piE_cospsi*\
                 delta_zeta_e - piE_sinpsi*delta_zeta_n
-            u_per = self.u0 + piE_sinpsi*\
+            u_par = (t - self.t0)/self.tE + piE_sinpsi*\
                 delta_zeta_e + piE_cospsi*delta_zeta_n
 
+            # Save value of pi_E
+            self.pi_E = T.sqrt((self.a_par**2 + self.a_per**2)/\
+                (delta_zeta_e_ddot_t0**2 + delta_zeta_n_ddot_t0**2))
+            
             return T.sqrt(u_par**2 + u_per**2)  
 
     def magnification(self, t):
@@ -1094,10 +1130,6 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             (1, 1)))[0, 0]
         zeta_n_dot_t0 = self.zeta_n_dot_interp.evaluate(T.reshape(self.t0,
             (1, 1)))[0, 0]
-#        zeta_e_ddot_t0 = self.zeta_e_ddot_interp.evaluate(T.reshape(self.t0,
-#            (1, 1)))[0, 0]
-#        zeta_n_ddot_t0 = self.zeta_n_ddot_interp.evaluate(T.reshape(self.t0,
-#            (1, 1)))[0, 0]
 
         # Compute delta_zeta function 
         delta_zeta_e = zeta_e - zeta_e_t0 -\
