@@ -541,6 +541,72 @@ class SingleLensModel(pm.Model):
             pred_list.append(prediction_eval[i, mask_numpy[i, :]])
 
         return pred_list
+    
+    def evaluate_trajectory_on_grid(self, trace, t_grid, n_samples=50):
+        """
+        Evaluates different trajectories of the lens w.r. top the source on 
+        the plane of the sky in (u_n, u_e) coordinates.
+        
+        Parameters
+        ----------
+        trace : PyMC3 MultiTrace object
+            Trace object containing samples from posterior.
+        t_grid : 1D numpy array
+            Time grid for which the model is to be evaluated.         
+        n_samples : int, optional
+            Number of parameter samples for which the model is to be evaluated,
+            these are randomly picked from the trace object, by default 50.
+
+        Returns
+        -------
+        ndarray
+            Numpy array of shape (n_sample, 2, len(t_grid)). The first 
+            component is u_n, the second u_e.
+        """
+        prediction_eval = np.zeros((n_samples, 2, len(t_grid)))
+
+        # Construct tensors needed to evaluate the model
+        t_grid_tensor, _ = self.construct_masked_tensor([t_grid])
+
+        # Evaluate model for each sample
+        for i, sample in enumerate(xo.get_samples_from_trace(trace, 
+                size=n_samples)):
+            
+            # Tensor which is to be evaluated in model context
+            t = t_grid_tensor
+            delta_zeta_n, delta_zeta_e = self.compute_delta_zeta(t_grid_tensor)
+            if (self.parametrization=='angle_magnitude'):
+                u_n = -self.u0*T.sin(self.psi) + (t - self.t0)/\
+                    self.tE*T.cos(self.psi) + self.pi_E*delta_zeta_n
+                u_e = self.u0*T.cos(self.psi) + (t - self.t0)/\
+                    self.tE*T.sin(self.psi) + self.pi_E*delta_zeta_e
+        
+            elif (self.parametrization=='local_acceleration'):
+                # Compute u(t)
+                cospsi = (self.a_par*self.delta_zeta_n_ddot_t0 +\
+                    self.a_per*self.delta_zeta_e_ddot_t0)/(self.delta_zeta_e_ddot_t0**2 +\
+                        self.delta_zeta_n_ddot_t0**2)/self.pi_E
+                sinpsi = (self.a_par*self.delta_zeta_e_ddot_t0 -\
+                    self.a_per*self.delta_zeta_n_ddot_t0)/(self.delta_zeta_e_ddot_t0**2 +\
+                        self.delta_zeta_n_ddot_t0**2)/self.pi_E
+
+                u_n = -self.u0*sinpsi + (t - self.t0)/\
+                    self.tE*cospsi + self.pi_E*delta_zeta_n
+                u_e = self.u0*cospsi + (t - self.t0)/\
+                    self.tE*sinpsi + self.pi_E*delta_zeta_e
+
+            else: 
+                cospsi = self.pi_EN/self.pi_E
+                sinpsi = self.pi_EE/self.pi_E
+                u_n = -self.u0*sinpsi + (t - self.t0)/\
+                    self.tE*cospsi + self.pi_E*delta_zeta_n
+                u_e = self.u0*cospsi + (t - self.t0)/\
+                    self.tE*sinpsi + self.pi_E*delta_zeta_e
+
+            prediction_eval[i, 0, :] = xo.eval_in_model(u_e, sample)
+            prediction_eval[i, 1, :] = xo.eval_in_model(u_n, sample)
+
+        return prediction_eval
 
     def generate_mock_dataset(self):
         """
@@ -927,13 +993,16 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
 
         else:
             # Acceleration parameters
-    #        self.a_par = pm.Exponential('a_par', lam=10, testval=0.01)
-    #        self.a_vert = pm.Exponential('a_vert', lam=10, testval=0.01)
+    #        self.a_par = pm.Exponential('a_par', lam=100, testval=0.001)
+    #        self.a_vert = pm.Exponential('a_vert', lam=100, testval=0.001)
 
-            self.a_per = pm.Normal('a_per', mu=0, sd=0.001, testval=0.0)
-            self.a_par = pm.Normal('a_par', mu=0, sd=0.001, testval=0.0)
+            self.a_per = pm.Normal('a_per', mu=0, sd=0.0001, testval=0.0)
+            self.a_par = pm.Normal('a_par', mu=0, sd=0.0001, testval=0.0)
 
-            self.pi_E = pm.Deterministic('pi_E', 0.)
+            # Save value of pi_E
+            self.pi_E = pm.Deterministic('pi_E', 
+                T.sqrt((self.a_par**2 + self.a_per**2)/\
+                (self.delta_zeta_e_ddot_t0**2 + self.delta_zeta_n_ddot_t0**2)))
 
         # Compute the log_likelihood
         self.log_likelihood()
@@ -977,14 +1046,14 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
 
     def initialize_zeta_function_interpolators(self, data):
         """
-        This function takes a `caustic.data` object, calls NASA's JPL Horizons
-        to calculate the Earth's orbital elements for each of the observed 
-        times. It then computes the projection of the Earth--Sun separation
-        vector onto the plane of the sky and its derivatives. It then initializes 
+        This function calls NASA's JPL Horizons to calculate the Earth's 
+        orbital elements for each of the observed times. It computes the 
+        projection of the Earth--Sun separation vector onto the plane of the 
+        sky as well as its derivatives. It then initializes 
         `exoplanet.interp.RegularGridInterpolator` objects as class attributes.
         These interpolators are used to evaluate the zeta function and its
-        derivatives at arbitrary times and they are used in the likelihood 
-        computation.
+        derivatives at arbitrary times which is needed to compute the 
+        likelihood.
         
         Parameters
         ----------
@@ -1028,9 +1097,17 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         self.zeta_n_ddot_interp = xo.interp.RegularGridInterpolator(points, 
             zeta_n_ddot[:, None])
 
+        # Compute 2nd derivatives of zeta functions at t0, this is only 
+        # necessary if using the parametrization in terms of local acceleration
+        if (self.parametrization=='local_acceleration'):
+            self.delta_zeta_e_ddot_t0 = self.zeta_e_ddot_interp.evaluate(\
+                    T.reshape(self.t0, (1, 1)))[0, 0]
+            self.delta_zeta_n_ddot_t0 = self.zeta_n_ddot_interp.evaluate(\
+                    T.reshape(self.t0, (1, 1)))[0, 0]
+
     def compute_u(self, t, delta_zeta_e, delta_zeta_n):
         """
-        Computes the magnitude of the relative lens-source separatin vector
+        Computes the magnitude of the relative lens-source separation vector
         u(t). The parametrization used is specified by the 
         `self.parametrization` property.
         
@@ -1038,7 +1115,7 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
         ----------
         t : theano.tensor
             Tensor containing times for which u(t) is to be computed. Needs 
-            to have shape (n_bands, max_npoints)
+            to have shape (n_bands, npoints)
         delta_zeta_e : theano.tensor
             East component of delta_zeta(t). Same shape as t.
         delta_zeta_n : theano.tensor
@@ -1057,55 +1134,34 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
                 delta_zeta_e + self.pi_E*T.cos(self.psi)*delta_zeta_n
 
             return T.sqrt(u_par**2 + u_per**2)
-
-        elif (self.parametrization=='two_component'):
-            u_per = self.u0 + self.pi_EN*delta_zeta_e - self.pi_EE*delta_zeta_n
-            u_par = (t - self.t0)/self.tE + self.pi_EE*delta_zeta_e +\
-                self.pi_EN*delta_zeta_n
-
-            return T.sqrt(u_par**2 + u_per**2)
-
-        else:
-            # Parallax parameters
-            delta_zeta_e_ddot_t0 = self.zeta_e_ddot_interp.evaluate(\
-                T.reshape(self.t0, (1, 1)))[0, 0]
-            delta_zeta_n_ddot_t0 = self.zeta_n_ddot_interp.evaluate(\
-                T.reshape(self.t0, (1, 1)))[0, 0]
-
+        
+        elif (self.parametrization=='local_acceleration'):
             # Compute u(t)
-            piE_cospsi = (self.a_par*delta_zeta_n_ddot_t0 +\
-                self.a_per*delta_zeta_e_ddot_t0)/(delta_zeta_e_ddot_t0**2 +\
-                    delta_zeta_n_ddot_t0**2)
-            piE_sinpsi = (self.a_par*delta_zeta_e_ddot_t0 -\
-                self.a_per*delta_zeta_n_ddot_t0)/(delta_zeta_e_ddot_t0**2 +\
-                    delta_zeta_n_ddot_t0**2)
+            piE_cospsi = (self.a_par*self.delta_zeta_n_ddot_t0 +\
+                self.a_per*self.delta_zeta_e_ddot_t0)/(self.delta_zeta_e_ddot_t0**2 +\
+                    self.delta_zeta_n_ddot_t0**2)
+            piE_sinpsi = (self.a_par*self.delta_zeta_e_ddot_t0 -\
+                self.a_per*self.delta_zeta_n_ddot_t0)/(self.delta_zeta_e_ddot_t0**2 +\
+                    self.delta_zeta_n_ddot_t0**2)
 
             u_per = self.u0 + piE_cospsi*\
                 delta_zeta_e - piE_sinpsi*delta_zeta_n
             u_par = (t - self.t0)/self.tE + piE_sinpsi*\
                 delta_zeta_e + piE_cospsi*delta_zeta_n
 
-            # Save value of pi_E
-            self.pi_E = T.sqrt((self.a_par**2 + self.a_per**2)/\
-                (delta_zeta_e_ddot_t0**2 + delta_zeta_n_ddot_t0**2))
-            
             return T.sqrt(u_par**2 + u_per**2)  
 
-    def magnification(self, t):
+        else: 
+            u_per = self.u0 + self.pi_EN*delta_zeta_e - self.pi_EE*delta_zeta_n
+            u_par = (t - self.t0)/self.tE + self.pi_EE*delta_zeta_e +\
+                self.pi_EN*delta_zeta_n
+
+            return T.sqrt(u_par**2 + u_per**2)
+
+    def compute_delta_zeta(self, t):
         """
-        Computes the magnification fraction [A(u) - 1]/[A(u0) - 1]
-        where A(u) is the magnification function.
-        
-        Parameters
-        ----------
-        t : theano.tensor
-            Tensor containing times for which A(t) is to be computed. Needs 
-            to have shape (n_bands, max_npoints)
-        
-        Returns
-        -------
-        theano.tensor
-            The value of the magnification at each time t.
+        Computes the components of delta_zeta vector - the devaition of the 
+        projected separation of the Sun relative to time t0.
         """
         zeta_e_list = []
         zeta_n_list = []
@@ -1118,7 +1174,7 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             zeta_n_list.append(self.zeta_n_interp.evaluate(pts).transpose())
 
         # Stack interpolated functions such that they have the same shape as
-        # self.t, namely, (n_bands, max_npoints)
+        # self.t, namely, (n_bands, npoints)
         zeta_e = T.concatenate(zeta_e_list, axis=1)
         zeta_n = T.concatenate(zeta_n_list, axis=1)
 
@@ -1136,6 +1192,26 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
              (t - self.t0)*zeta_e_dot_t0
         delta_zeta_n = zeta_n - zeta_n_t0 -\
              (t - self.t0)*zeta_n_dot_t0
+
+        return delta_zeta_n, delta_zeta_e
+
+    def magnification(self, t):
+        """
+        Computes the magnification fraction [A(u) - 1]/[A(u0) - 1]
+        where A(u) is the magnification function.
+        
+        Parameters
+        ----------
+        t : theano.tensor
+            Tensor containing times for which A(t) is to be computed. Needs 
+            to have shape (n_bands, max_npoints)
+        
+        Returns
+        -------
+        theano.tensor
+            The value of the magnification at each time t.
+        """
+        delta_zeta_n, delta_zeta_e = self.compute_delta_zeta(t)
 
         A = lambda u: (u**2 + 2)/(u*T.sqrt(u**2 + 4))
         u = self.compute_u(t, delta_zeta_e, delta_zeta_n)

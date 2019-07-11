@@ -6,8 +6,6 @@ import pymc3 as pm
 import theano.tensor as T
 import os
 
-from data import OGLEData
-
 mpl.rc('font',**{'family':'serif','serif':['Palatino']})
 mpl.rc('text', usetex=False)
 mpl.rcParams['axes.labelsize'] = 22
@@ -30,13 +28,15 @@ def qq_plot(ax, residuals):
     ax.set_xlabel("Modeled residuals")
     ax.set_ylabel("Measured residuals")
 
-def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
+def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples=50,
+        **kwargs):
     """
     Plots model in data space given samples from the posterior 
     distribution. Also plots residuals with respect to the median model, where 
     the median model is the median of multiple posterior draws of the model 
     in data space, rather then a single draw corresponding to median values of
-    all parameters.
+    all parameters. All extra keyword arguments are passed to the matplotlib
+    plot function.
     
     Parameters
     ----------
@@ -54,12 +54,13 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
     """
     # Load standardized data
     tables = event.get_standardized_data()
-    t_grids = [np.linspace(table['HJD'][0], table['HJD'][-1], 2000)\
-        for table in tables]
-    t_observed = [np.array(table['HJD']) for table in tables]
 
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
+        t_grids = [np.linspace(model_instance.t_begin, model_instance.t_end,
+            5000) for table in tables]
+        t_observed = [np.array(table['HJD']) for table in tables]
+
         trace = pm.load_trace(trace_path) 
         pred = model_instance.evaluate_posterior_model_on_grid(trace, t_grids, 
             n_samples)
@@ -91,10 +92,11 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples):
             fmt='o', color='C' + str(n), alpha=0.5)
         ax[1].grid(True)
 
-def plot_map_model_and_residuals(ax, event, pm_model, map_point):
+def plot_map_model_and_residuals(ax, event, pm_model, map_point, **kwargs):
     """
     Plots model in data space given MAP parameters of the model. Also plots 
-    residuals with respect to MAP model.
+    residuals with respect to MAP model. All extra keyword arguments are passed
+    to the matplotlib plot function.
     
     Parameters
     ----------
@@ -110,12 +112,13 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point):
     """
     # Load standardized data
     tables = event.get_standardized_data()
-    t_grids = [np.linspace(table['HJD'][0], table['HJD'][-1], 5000)\
-        for table in tables]
-    t_observed = [table['HJD'] for table in tables]
-
+    
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
+        t_grids = [np.linspace(model_instance.t_begin, model_instance.t_end,
+            5000) for table in tables]
+        t_observed = [table['HJD'] for table in tables]
+
         pred = model_instance.evaluate_map_model_on_grid(t_grids, map_point)
         pred_at_observed_times = model_instance.evaluate_map_model_on_grid(
             t_observed, map_point)
@@ -128,19 +131,20 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point):
 
     # Plot predictions for various samples
     for n in range(model_instance.n_bands): # iterate over bands
-        ax[0].plot(t_grids[n], pred[n], color='C' + str(n))
+        ax[0].plot(t_grids[n], pred[n], color='C' + str(n), **kwargs)
 
     # Calculate and plot residuals
     for n in range(model_instance.n_bands): # iterate over bands
         residuals = np.array(tables[n]['flux']) - pred_at_observed_times[n]
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
-            fmt='o', color='C' + str(n), alpha=0.5)
+            fmt='o', color='C' + str(n), alpha=0.5, **kwargs)
         ax[1].grid(True)
 
-def plot_prior_model_samples(ax, event, pm_model, n_samples):
+def plot_prior_model_samples(ax, event, pm_model, n_samples, **kwargs):
     """
     Plots model in data space given samples drawn from the prior probability
-    distribution. This is useful debugging prior choices.
+    distribution. This is useful debugging prior choices. All extra keyword
+    arguments are passed to the matplotlib plot function.
     
     Parameters
     ----------
@@ -170,7 +174,7 @@ def plot_prior_model_samples(ax, event, pm_model, n_samples):
     for i in range(n_samples):
         for n in range(model_instance.n_bands): # iterate over bands
             ax.plot(t_grids[n], predictions[n][i, :], color='C' + str(n), 
-                alpha=0.5)
+                alpha=0.5, **kwargs)
 
     ax.set_xlabel('HJD - 2450000')
 
@@ -218,6 +222,48 @@ def plot_histograms_of_prior_samples(event, pm_model, output_dir):
             ax.hist(value, bins=30);
             plt.savefig(directory + label + '.png')
 
+def plot_trajectory(ax, pm_model, trace_path, n_samples=50, **kwargs):
+    """
+    Plots different trajectories of the lens w.r. top the source on the plane
+    of the sky in (u_n, u_e) coordinates. All extra keyword arguments are 
+    passed to the plotting function.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes 
+        Needs to be of shape (1, 1).
+    pm_model : pymc3.Model
+        PyMC3 model object which was used to obtain posterior samples in the
+        trace.
+    trace_path : str
+        Path to PyMC3 trace object saved as 'model.trace'.
+    n_samples: int
+        Number of posterior draws to be plotted.
+    """
+    # Compute model predictions on a fine grid 
+    with pm_model as model_instance:
+        t_grid = np.linspace(model_instance.t_begin, model_instance.t_end, 2000)
+        trace = pm.load_trace(trace_path) 
+        pred = model_instance.evaluate_trajectory_on_grid(trace, t_grid, 
+            n_samples)
+
+    ax.set_xlabel(r'$u_e\,[\theta_E]$')
+    ax.set_ylabel(r'$u_n\,[\theta_E]$')
+    ax.axhline(0., color='grey')
+    ax.axvline(0., color='grey')
+    ax.set_xlim(-5, 5)
+    ax.set_ylim(-5, 5)
+
+    # Source star
+    circle = plt.Circle((0., 0.), 0.1, color='C1', zorder=2)
+    ax.add_artist(circle)
+
+    ax.grid()
+
+    # Plot predictions for various samples
+    for i in range(n_samples):
+        ax.plot(pred[i, 0, :], pred[i, 1, :], alpha=0.2, **kwargs)
+
 def remove_outliers(model, event):
     """
     Optimizes a flexible PSPL model including a Gaussian Process in order to 
@@ -260,9 +306,9 @@ def remove_outliers(model, event):
     fig, ax = plt.subplots(figsize=(25, 10))
     event.plot(ax)
 
-def plot_violin_plots(ax, pm_models, trace_paths, parameter_names):
-    for idx, model in enumerate(pm_models):
-        with pm_model as model_instance:
-            trace = pm.load_trace(trace_path) 
-
-    return 0
+#def plot_violin_plots(ax, pm_models, trace_paths, parameter_names):
+#    for idx, model in enumerate(pm_models):
+#        with pm_model as model_instance:
+#            trace = pm.load_trace(trace_path) 
+#
+#    return 0
