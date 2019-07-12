@@ -993,11 +993,11 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
 
         else:
             # Acceleration parameters
-    #        self.a_par = pm.Exponential('a_par', lam=100, testval=0.001)
-    #        self.a_vert = pm.Exponential('a_vert', lam=100, testval=0.001)
+            self.a_par = pm.Exponential('a_par', lam=1000, testval=0.001)
+            self.a_per = pm.Exponential('a_vert', lam=1000, testval=0.001)
 
-            self.a_per = pm.Normal('a_per', mu=0, sd=0.0001, testval=0.0)
-            self.a_par = pm.Normal('a_par', mu=0, sd=0.0001, testval=0.0)
+#            self.a_per = pm.Normal('a_per', mu=0, sd=1e-4, testval=0.0)
+#            self.a_par = pm.Normal('a_par', mu=0, sd=1e-4, testval=0.0)
 
             # Save value of pi_E
             self.pi_E = pm.Deterministic('pi_E', 
@@ -1130,7 +1130,7 @@ class PointSourcePointLensAnnualParallax(SingleLensModel):
             #psi = self.psi + np.pi
             u_per = self.u0 + self.pi_E*T.cos(self.psi)*\
                 delta_zeta_e - self.pi_E*T.sin(self.psi)*delta_zeta_n
-            u_par = (t - self.t0)*self.omega_E + self.pi_E*T.sin(self.psi)*\
+            u_par = (t - self.t0)/self.tE + self.pi_E*T.sin(self.psi)*\
                 delta_zeta_e + self.pi_E*T.cos(self.psi)*delta_zeta_n
 
             return T.sqrt(u_par**2 + u_per**2)
