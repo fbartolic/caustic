@@ -2,4 +2,4 @@
 [PyMC3](https://docs.pymc.io/), [exoplanet](https://exoplanet.dfm.io/en/latest/), and [Astropy](http://www.astropy.org/).
 
 Although there are now several open-source codes for modeling microlensing events, none 
-of those use gradient-based samplers such as Hamiltonian Monte Carlo. `caustic` is still very much in early development and lacking documentation, I hope to release a packaged version before mid 2019. 
+of those use gradient-based samplers such as Hamiltonian Monte Carlo. `caustic` is still very much in early development and lacking documentation, I hope to release a packaged version before autumn 2019. 
