@@ -13,23 +13,75 @@ mpl.rcParams['xtick.labelsize'] = 22
 mpl.rcParams['ytick.labelsize'] = 22
 mpl.rcParams['axes.titlesize'] = 18
 
-def qq_plot(ax, residuals):
-    """Plots quantile-quantile plot of residuals vs draws from a Gaussian."""
-    percentiles = np.linspace(0, 100, 500)
-    quantile_residuals = np.percentile(residuals, percentiles)
-    quantile_model = np.percentile(np.random.normal(size=10000), percentiles)
+def construct_masked_tensor(array_list):
+    """
+    Given a list of 1D numpy arrays, this function returns a theano tensor
+    of shape (n_elements, n_max) where n_elements is the number of arrays
+    in the list, and n_max is the length of the largest array in the list.
+    The missing values are filled in with zeros and a mask is returned 
+    together with tensor. The purpose of this function is to construct 
+    tensors instead of using lists in order to avoid having to do loops.
 
-    ax.scatter(quantile_model, quantile_residuals, marker='o', color='black',
-        alpha=0.3)
-    ax.grid()
-    x = np.linspace(quantile_model[0], quantile_model[-1])
-    # ax.plot(x, x, color='black', linestyle='dashed', alpha=0.8)
-    ax.set_aspect(1)
-    ax.set_xlabel("Modeled residuals")
-    ax.set_ylabel("Measured residuals")
+    Parameters
+    ----------
+    array_list : list 
+        List of numpy arrays of varying lengths. 
+    
+    Returns
+    -------
+    tuple 
+        Returns tuple (tensor, mask) where tensor and maks are 
+        theano.tensor objects of the same shape (n_elements, n_max). 
+        The mask tensor is of datta type int8 and the elements are 
+        equal to 1 for non-filled in values and zero otherwise. To use
+        the mask in theano, use `tensor[mask.nonzero()]`.
 
-def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples=50,
-        **kwargs):
+    """
+    for array in array_list:
+        if(array.ndim != 1):
+            raise ValueError('Make sure that all of the arrays are 1D and\
+            have the same dimension')
+
+    n_max =  np.max([len(array) for array in array_list])
+    tensor = T._shared(np.stack([np.pad(array, 
+        (0, n_max - len(array)), 'constant', 
+        constant_values=(0.,)) for array in array_list]))
+    
+    masks_list = []
+
+    for array in array_list:
+        array = np.append(
+            np.ones(len(array)),  
+            np.zeros(n_max - len(array))
+            )
+        masks_list.append(array)
+
+    mask = T._shared(np.stack(masks_list).astype('int8'))
+
+    return tensor, mask
+
+def guess_t0(event):
+    """
+    Guesses an intial value for the t0 parameter. This is necessary because
+    the posterior is highly multi-modal in t0 and the sampler usually
+    fails to converge if t0 is not close to true value.
+    """
+    event.remove_worst_outliers(window_size=20, mad_cutoff=2)
+    tables = event.get_standardized_data()
+    fluxes = np.concatenate([table['flux'] for table in tables])
+    times = np.concatenate([table['HJD'] for table in tables])
+
+    guess = np.median(times[fluxes > 4])
+
+    cut = 4
+    while np.isnan(guess):
+        guess = np.median(times[fluxes > cut])
+        cut -= 0.5
+
+    return guess
+
+def plot_model_and_residuals(ax, event, pm_model, trace, time_span=None, 
+        n_samples=50, **kwargs):
     """
     Plots model in data space given samples from the posterior 
     distribution. Also plots residuals with respect to the median model, where 
@@ -47,8 +99,10 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples=50,
     pm_model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
         trace.
-    trace_path : str
-        Path to PyMC3 trace object saved as 'model.trace'.
+    trace : PyMC3 MultiTrace object
+        Trace object containing samples from posterior.
+    time_span : list
+        Timespan for which the model is to be evaluated [t_begin, t_end].
     n_samples: int
         Number of posterior draws to be plotted.
     """
@@ -57,11 +111,13 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples=50,
 
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
-        t_grids = [np.linspace(model_instance.t_begin, model_instance.t_end,
-            5000) for table in tables]
+        if time_span is None:
+            time_span = [model_instance.t_begin, model_instance.t_end]
+
+        t_grids = [np.linspace(time_span[0], time_span[1],
+            2000) for table in tables]
         t_observed = [np.array(table['HJD']) for table in tables]
 
-        trace = pm.load_trace(trace_path) 
         pred = model_instance.evaluate_posterior_model_on_grid(trace, t_grids, 
             n_samples)
         pred_at_observed_times = model_instance.evaluate_posterior_model_on_grid(trace,
@@ -75,13 +131,13 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples=50,
 
     for a in ax.ravel():
         a.set_xlim(t_grids[0][0], t_grids[0][-1])
-#        a.set_xlim(7820, 8020)
 
     # Plot predictions for various samples
     for n in range(model_instance.n_bands): # iterate over bands
         for i in range(n_samples):
             ax[0].plot(t_grids[n], pred[n][i, :], color='C' + str(n), 
-                alpha=0.2)
+                alpha=0.2, **kwargs)
+                
     # Calculate and plot residuals
     for n in range(model_instance.n_bands): # iterate over bands
         quantile_predictions = np.percentile(pred_at_observed_times[n],
@@ -89,10 +145,11 @@ def plot_model_and_residuals(ax, event, pm_model, trace_path, n_samples=50,
 
         residuals =  tables[n]['flux'] - quantile_predictions[1]
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
-            fmt='o', color='C' + str(n), alpha=0.5)
+            fmt='o', color='C' + str(n), alpha=0.5, **kwargs)
         ax[1].grid(True)
 
-def plot_map_model_and_residuals(ax, event, pm_model, map_point, **kwargs):
+def plot_map_model_and_residuals(ax, event, pm_model, map_point, time_span=None,
+        **kwargs):
     """
     Plots model in data space given MAP parameters of the model. Also plots 
     residuals with respect to MAP model. All extra keyword arguments are passed
@@ -109,14 +166,19 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point, **kwargs):
         trace.
     map_point : dict 
         Dictionary containing the MAP values of model parameters.
+    time_span : list
+        Timespan for which the model is to be evaluated [t_begin, t_end].
     """
     # Load standardized data
     tables = event.get_standardized_data()
     
     # Compute model predictions on a fine grid and at observed times
     with pm_model as model_instance:
-        t_grids = [np.linspace(model_instance.t_begin, model_instance.t_end,
-            5000) for table in tables]
+        if time_span is None:
+            time_span = [model_instance.t_begin, model_instance.t_end]
+
+        t_grids = [np.linspace(time_span[0], time_span[1],
+            2000) for table in tables]
         t_observed = [table['HJD'] for table in tables]
 
         pred = model_instance.evaluate_map_model_on_grid(t_grids, map_point)
@@ -140,7 +202,8 @@ def plot_map_model_and_residuals(ax, event, pm_model, map_point, **kwargs):
             fmt='o', color='C' + str(n), alpha=0.5, **kwargs)
         ax[1].grid(True)
 
-def plot_prior_model_samples(ax, event, pm_model, n_samples, **kwargs):
+def plot_prior_model_samples(ax, event, pm_model, n_samples, time_span=None,
+        **kwargs):
     """
     Plots model in data space given samples drawn from the prior probability
     distribution. This is useful debugging prior choices. All extra keyword
@@ -157,16 +220,22 @@ def plot_prior_model_samples(ax, event, pm_model, n_samples, **kwargs):
     pm_model : pymc3.Model
         PyMC3 model object. Needs to work with `sample_prior_predictive` method
         from PyMC3.
+    time_span : list
+        Timespan for which the model is to be evaluated [t_begin, t_end].
     n_samples : int
         Number of samples from prior.
     """
     # Load standardized data
     tables = event.get_standardized_data()
-    t_grids = [np.linspace(table['HJD'][0], table['HJD'][-1], 2000)\
-        for table in tables]
 
     # Sample from the prior
     with pm_model as model_instance:
+        if time_span is None:
+            time_span = [model_instance.t_begin, model_instance.t_end]
+
+        t_grids = [np.linspace(time_span[0], time_span[1],
+            2000) for table in tables]
+
         trace = pm.sample_prior_predictive(n_samples)
         predictions = model_instance.evaluate_prior_model_on_grid(trace, t_grids)
 
@@ -222,7 +291,8 @@ def plot_histograms_of_prior_samples(event, pm_model, output_dir):
             ax.hist(value, bins=30);
             plt.savefig(directory + label + '.png')
 
-def plot_trajectory(ax, pm_model, trace_path, n_samples=50, **kwargs):
+def plot_trajectory(ax, pm_model, trace, n_samples=50, time_span=None,
+        **kwargs):
     """
     Plots different trajectories of the lens w.r. top the source on the plane
     of the sky in (u_n, u_e) coordinates. All extra keyword arguments are 
@@ -235,15 +305,20 @@ def plot_trajectory(ax, pm_model, trace_path, n_samples=50, **kwargs):
     pm_model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
         trace.
-    trace_path : str
-        Path to PyMC3 trace object saved as 'model.trace'.
+    trace : PyMC3 MultiTrace object
+        Trace object containing samples from posterior.
+    time_span : list
+        Timespan for which the model is to be evaluated [t_begin, t_end].
     n_samples: int
         Number of posterior draws to be plotted.
     """
     # Compute model predictions on a fine grid 
     with pm_model as model_instance:
-        t_grid = np.linspace(model_instance.t_begin, model_instance.t_end, 2000)
-        trace = pm.load_trace(trace_path) 
+        if time_span is None:
+            time_span = [model_instance.t_begin, model_instance.t_end]
+
+        t_grid = np.linspace(time_span[0], time_span[1])
+
         pred = model_instance.evaluate_trajectory_on_grid(trace, t_grid, 
             n_samples)
 
@@ -264,7 +339,7 @@ def plot_trajectory(ax, pm_model, trace_path, n_samples=50, **kwargs):
     for i in range(n_samples):
         ax.plot(pred[i, 0, :], pred[i, 1, :], alpha=0.2, **kwargs)
 
-def remove_outliers(model, event):
+def remove_outliers(pm_model, event):
     """
     Optimizes a flexible PSPL model including a Gaussian Process in order to 
     flag any outliers.
@@ -280,35 +355,28 @@ def remove_outliers(model, event):
     event.remove_worst_outliers()
 
     # Optimize a flexible GP model model
-    with model:
-        start = model.test_point
-        map_soln = xo.optimize(start=start, vars=[model.F_base])
-        map_soln = xo.optimize(start=map_soln, vars=[model.Delta_F])
-        map_soln = xo.optimize(start=map_soln, vars=[model.u0])
-        map_soln = xo.optimize(start=map_soln, vars=[model.t0])
-        map_soln = xo.optimize(start=map_soln, vars=[model.u0, model.teff])
+    with pm_model:
+        start = pm_model.test_point
+        map_soln = xo.optimize(start=start, vars=[pm_model.F_base])
+        map_soln = xo.optimize(start=map_soln, vars=[pm_model.Delta_F])
+        map_soln = xo.optimize(start=map_soln, vars=[pm_model.u0])
+        map_soln = xo.optimize(start=map_soln, vars=[pm_model.t0])
+        map_soln = xo.optimize(start=map_soln, vars=[pm_model.u0, pm_model.teff])
         map_soln = xo.optimize(start=map_soln)
 
         t_observed = [T._shared(table['HJD']) for table in event.tables]
-        pred_at_observed_times = model.evaluate_map_model_on_grid(
+        pred_at_observed_times = pm_model.evaluate_map_model_on_grid(
             t_observed, map_soln)
 
     # Reomove all points deviating from MAP model by x*sigma_MAD
-    for n in range(model.n_bands):
+    for n in range(pm_model.n_bands):
         resid = event.tables[n]['flux'] - pred_at_observed_times[n]
         mad = lambda x: 1.4826*np.median(np.abs(x - np.median(x)))
         mask = np.abs(resid/mad(resid)) < 7
 
         # Updata mask
-        event.masks[n] = mask
+        event.light_curves[n]['mask'] = mask
 
-    # Plot data without outliers
+    # Plot data 
     fig, ax = plt.subplots(figsize=(25, 10))
     event.plot(ax)
-
-#def plot_violin_plots(ax, pm_models, trace_paths, parameter_names):
-#    for idx, model in enumerate(pm_models):
-#        with pm_model as model_instance:
-#            trace = pm.load_trace(trace_path) 
-#
-#    return 0
