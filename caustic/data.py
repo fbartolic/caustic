@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 from io import StringIO
 import re
 import os
+
 from astropy.coordinates import SkyCoord
 from astropy import units as u 
 from astropy.table import Table
@@ -11,95 +12,94 @@ from astropy.table import Table
 class Data(object):
     """
     Base class for microlensing data from various observatories. 
-    Subclasses should overload the :func:`Data.load_data`. The time series
+    Subclasses should overload the :func:`Data.__load_data`. The time series
     data is stored as a list of Astropy tables, one for each photometric filter.
     """
     def __init__(self, event_dir=""):
-        self.tables = []
-        self.masks = []
-        self.event_name = ""
-        self.coordinates = None
-        self.units = 'magnitudes' # units have to be the same across all filters
+        self.__tables = []
+        self.__event_name = ""
+        self.__coordinates = None
+        self.__units = 'magnitudes' # units have to be the same across bands
 
     def __str__(self):
-        print(self.tables)
+        print(self.__tables)
 
     def __add__(self, other):
         """
         Defines an addition operation between datasets. Given multiple 
         observations of the same event, one can load each dataset seperately 
-        and simply add them together.
+        and add them together.
         """
         result = Data()
-        if (self.units != other.units):
-            raise ValueError('Make sure that all datasets have the same units\
-                before adding them.')
-        result.tables = self.tables + other.tables # concatonates tables
+
+        self.units = 'fluxes'
+        other.units = 'fluxes'
+        result.units = 'fluxes'
+
+        result.light_curves = self.light_curves + other.light_curves
     
-        if (self.coordinates is not None):
-            result.coordinates = self.coordinates
-        elif (other.coordinates is not None):
-            result.coordinates = self.coordinates
+        if (self.event_coordinates is not None and \
+            other.event_coordinates is not None):
+            if self.event_coordinates==other.event_coordinates:
+                result.coordinates = self.__coordinates
+            else:
+                raise ValueError("Coordinates of the two events need to match.")
+        elif (self.event_coordinates is not None):
+            result.event_coordinates = self.event_coordinates
+        elif (other.event_coordinates is not None):
+            result.event_coordinates = other.event_coordinates
+
+        result.event_name = self.event_name + other.event_name
 
         return result
 
-    def load_data(self, event_dir):
+    def __load_data(self, event_dir):
         """
         Loads raw time series data for each survey into Astropy tables,
         stores it in `tables` class atrribute.
         """
 
-    def convert_data_to_fluxes(self):
+    def __convert_data_to_fluxes(self):
         """
         If the light curves stored in `tables` attribute are expressed in 
         magnitudes, calling this function will convert them to fluxes.
-        
-        Raises
-        ------
-        ValueError
-            Data is already in flux units.
-        
         """
-        if not (self.units=='magnitudes'):
-            raise ValueError('Data is already in flux units.')
+        if self.__units=='fluxes':
+            pass
+        
+        else:
+            for table in self.__tables:
+                F, F_err = self.__magnitudes_to_fluxes(table['mag'], 
+                    table['mag_err'], zero_point=22.)
 
-        for table in self.tables:
-            F, F_err = self.magnitudes_to_fluxes(table['mag'], 
-                table['mag_err'], zero_point=22.)
+                table.rename_column('mag', 'flux')
+                table.rename_column('mag_err', 'flux_err')
+                table['flux'] = F
+                table['flux_err'] = F_err
 
-            table.rename_column('mag', 'flux')
-            table.rename_column('mag_err', 'flux_err')
-            table['flux'] = F
-            table['flux_err'] = F_err
+            self.__units = 'fluxes'
 
-        self.units = 'fluxes'
-
-    def convert_data_to_magnitudes(self):
+    def __convert_data_to_magnitudes(self):
         """
         If the light curves stored in `tables` attribute are expressed in 
         fluxes, calling this function will convert them to magnitudes.
-        
-        Raises
-        ------
-        ValueError
-            Data is already in magnitude units.
-        
         """
-        if not (self.units=='fluxes'):
-            raise ValueError("Data is already in magnitude units.")
+        if self.__units=='magnitudes':
+            pass
 
-        for table in self.tables:
-            m, m_err = self.fluxes_to_magnitudes(table['flux'], 
-                table['flux_err'], zero_point=22.)
+        else:
+            for table in self.__tables:
+                m, m_err = self.__fluxes_to_magnitudes(table['flux'], 
+                    table['flux_err'], zero_point=22.)
 
-            table.rename_column('flux', 'mag')
-            table.rename_column('flux_err', 'mag_err')
-            table['mag'] = m
-            table['mag_err'] = m_err
+                table.rename_column('flux', 'mag')
+                table.rename_column('flux_err', 'mag_err')
+                table['mag'] = m
+                table['mag_err'] = m_err
 
-        self.units = 'magnitudes'
+            self.__units = 'magnitudes'
 
-    def magnitudes_to_fluxes(self, m, sig_m, zero_point=22.):
+    def __magnitudes_to_fluxes(self, m, sig_m, zero_point=22.):
         """
         Given the mean and the standard deviation of a astronomical magnitude
         which is assumed to be normally distributed, and a reference magnitude,
@@ -139,13 +139,13 @@ class Data(object):
 
         return mu_F, sig_F    
 
-    def fluxes_to_magnitudes(self, F, sig_F, zero_point=22):
+    def __fluxes_to_magnitudes(self, F, sig_F, zero_point=22):
         """
         Given the mean and the standard deviation of a measured flux 
         which is assumed to be log-normal distributed, and a reference magnitude,
         this function returns the mean and the standard deviation of an 
         astronomical magnitude, which is normally distributed. This function
-        is the inverse of :func:`magnitudes_to_fluxes`.
+        is the inverse of :func:`__magnitudes_to_fluxes`.
         
         Parameters
         ----------
@@ -177,25 +177,25 @@ class Data(object):
         flux units, rescaled to zero  median and unit variance, a format which 
         is more suitable for subsequent modeling.
         """
-        if not (self.units=='fluxes'):
-            self.convert_data_to_fluxes()
+        if not (self.__units=='fluxes'):
+            self.__convert_data_to_fluxes()
 
         # Subtract the median from the data such that baseline is at approx 
         # zero, rescale the data such that it has unit variance
         stanardized_data = []
-        for i, table in enumerate(self.tables):
-            mask = self.masks[i]
+        for i, table in enumerate(self.__tables):
+            mask = table['mask']
 
             table_std = Table()
             table_std.meta = table.meta
+            table_std['HJD'] = table['HJD'][mask] - 2450000
             table_std['flux'] = (table['flux'][mask] -\
                 np.median(table['flux'][mask]))/np.std(table['flux'][mask])
             table_std['flux_err'] = table['flux_err'][mask]/np.std(table['flux'][mask])
-            table_std['HJD'] = table['HJD'][mask] - 2450000
             stanardized_data.append(table_std)
 
         # Convert back to magnitudes
-        self.convert_data_to_magnitudes()
+        self.__convert_data_to_magnitudes()
 
         return stanardized_data
 
@@ -208,33 +208,32 @@ class Data(object):
         ax : Matplotlib axes object
 
         """
-        if (self.units=='fluxes'):
-            for i, table in enumerate(self.tables):
-                mask = self.masks[i]
-
-                # Plot data
-                ax.errorbar(table['HJD'][mask] - 2450000, table['flux'][mask], 
-                    table['flux_err'][mask], fmt='o', color='C' + str(i), 
-                    label=table.meta['observatory'] + ' ' + table.meta['filter'], 
-                    ecolor='C' + str(i), alpha=0.5)
-                ax.set_ylabel('flux')
-
-#                # Plot outliers
-#                ax.errorbar(table['HJD'][~mask] - 2450000,
-#                    table['flux'][~mask], 
-#                    table['flux_err'][~mask], fmt='o', color='C' + str(i),
-#                    ecolor='C' + str(i), alpha=0.1, label='outliers')
+        if (self.__units=='fluxes'):
+            unit = 'flux'
         else:
-            for i, table in enumerate(self.tables):
-                ax.errorbar(table['HJD'] - 2450000, table['mag'], 
-                    table['mag_err'], fmt='o', color='C' + str(i), 
-                    label=table.meta['observatory'] + ' ' + table.meta['filter'], 
-                    ecolor='C' + str(i), alpha=0.5)
-                ax.set_ylabel('mag')
-                ax.invert_yaxis()
+            unit = 'mag'
+
+        for i, table in enumerate(self.__tables):
+            mask = table['mask']
+
+            # Plot data
+            ax.errorbar(table['HJD'][mask] - 2450000, table[unit][mask], 
+                table[unit + '_err'][mask], fmt='o', color='C' + str(i), 
+                label=table.meta['observatory'] + ' ' + table.meta['filter'], 
+                ecolor='C' + str(i), alpha=0.5)
+            ax.set_ylabel(unit)
+
+            # Plot masked data
+            ax.errorbar(table['HJD'][~mask] - 2450000,
+                table[unit][~mask], 
+                table[unit + '_err'][~mask], fmt='o', color='C' + str(i),
+                ecolor='C' + str(i), alpha=0.1)
+
+        if (self.__units=='magnitudes'):
+            ax.invert_yaxis()
 
         ax.set_xlabel('HJD - 2450000')
-        ax.set_title(self.event_name)
+        ax.set_title(self.__event_name)
         ax.grid(True)
         ax.legend(prop={'size': 16})
 
@@ -250,22 +249,24 @@ class Data(object):
 
         # Plot masked data
         for i, table in enumerate(std_tables):
+            # Plot data
             ax.errorbar(table['HJD'], table['flux'], 
                 table['flux_err'], fmt='o', color='C' + str(i), 
                 label=table.meta['observatory'] + ' ' + table.meta['filter'], 
                 ecolor='C' + str(i), alpha=0.5)
-
+            ax.set_ylabel('flux')
+ 
         ax.grid(True)
-        ax.set_title(self.event_name)
+        ax.set_title(self.__event_name)
         ax.set_xlabel('HJD - 2450000')
         ax.set_ylabel('Flux (rescaled)')
         ax.legend(prop={'size': 16})
 
     def remove_worst_outliers(self, window_size=11, mad_cutoff=5):
-        if not (self.units=='fluxes'):
-            self.convert_data_to_fluxes()
+        if not (self.__units=='fluxes'):
+            self.__convert_data_to_fluxes()
 
-        for i, table in enumerate(self.tables):
+        for i, table in enumerate(self.__tables):
             series = pd.Series(table['flux']) 
             mad = lambda x: 1.4826*np.median(np.abs(x - np.median(x)))
             rolling_mad = np.array(series.rolling(window_size, 
@@ -280,26 +281,75 @@ class Data(object):
             mask = array > 5
             
             # Update masks
-            self.masks[i] = ~mask
+            self.__tables[i]['mask'] = ~mask
 
     def reset_masks(self):
-        for i in range(len(self.masks)):
-            self.masks[i] = np.ones(len(self.masks[i]), dtype=bool)
-            
+        for i in range(len(self.__tables)):
+            self.__tables[i]['mask'] = np.ones(len(self.__tables[i]['HJD']),
+                dtype=bool)
+
+    @property
+    def light_curves(self):
+        return self.__tables
+
+    @light_curves.setter
+    def light_curves(self, tables):
+        for table in tables:
+            if not isinstance(table, Table):
+                raise ValueError("You need to provide a list of Astropy Tables.")
+        self.__tables = tables
+
+    @property
+    def event_name(self):
+        return self.__event_name
+
+    @event_name.setter
+    def event_name(self, value):
+        if isinstance(value, str):
+            self.__event_name = value
+        else:
+            raise ValueError("Event name has to be a string.")
+    
+    @property
+    def event_coordinates(self):
+        return self.__coordinates
+
+    @event_coordinates.setter
+    def event_coordinates(self, coordinates):
+        if isinstance(coordinates, SkyCoord):
+            self.__coordinates = coordinates
+        else:
+            raise ValueError("Event coordinates must be passed as an"
+                "astropy.coordinates.SkyCoord object.")
+
+    @property
+    def units(self):
+        return self.__units
+
+    @units.setter
+    def units(self, value):
+        if value=='magnitudes':
+            self.__convert_data_to_magnitudes()
+        elif value=='fluxes':
+            self.__convert_data_to_fluxes()
+        else:
+            raise ValueError("The only to options for units are 'magnitudes'"
+                "or 'fluxes'.")
+    
 class OGLEData(Data):
     """Subclass of data class for dealing with OGLE data."""
     def __init__(self, event_dir):
         super(OGLEData, self).__init__(event_dir)
         with open(event_dir + '/params.dat') as f:
             lines = f.readlines() 
-            self.event_name = lines[0][:-1]
+            self._Data__event_name = lines[0][:-1]
             RA = lines[4][15:-1]
             Dec = lines[5][15:-1]
-            self.coordinates = SkyCoord(RA, Dec, 
+            self._Data__coordinates = SkyCoord(RA, Dec, 
                 unit=(u.hourangle, u.deg, u.arcminute))
-        self.load_data(event_dir)
+        self.__load_data(event_dir)
 
-    def load_data(self, event_dir):
+    def __load_data(self, event_dir):
         """Returns a table with raw data."""
         t = Table.read(event_dir + '/phot.dat', format='ascii')
 
@@ -309,19 +359,23 @@ class OGLEData(Data):
         t.columns[2].name = 'mag_err'
         t.keep_columns(('HJD', 'mag', 'mag_err'))
 
+        # Add mask column
+        mask = Table.Column(np.ones(len(t['HJD']), dtype=bool), name='mask', 
+            dtype=bool)
+        t.add_column(mask)  # Insert before the first table column
+
         # Add 2450000 if necessary
         if(t['HJD'][0] < 2450000):
             t['HJD'] += 2450000
 
         t.meta = {'filter':'I', 'observatory':'OGLE'}
-        self.tables.append(t)
-        self.masks = [np.ones(len(t['HJD']), dtype=bool)]
+        self._Data__tables.append(t)
 
 class MOAData(Data):
-    """Subclass of data class for dealing with OGLE data."""
+    """Subclass of data class for handling with MOA datasets."""
     def __init__(self, event_path, index_path):
         super(MOAData, self).__init__(event_path)
-        self.units = 'fluxes'
+        self._Data__units = 'fluxes'
 
         # Grabbing the event name is anything but trivial
         with open(event_path) as f:
@@ -341,12 +395,12 @@ class MOAData(Data):
                 usecols=(0, 1,), names=['Name', 'code'])
             
         key_value = index[index['code'].str.match(event_code)].iloc[0]
-        self.event_name = 'MOA-' + key_value.iloc[0]
-        self.load_data(event_path)
+        self._Data__event_name = 'MOA-' + key_value.iloc[0]
+        self._Data__load_data(event_path)
 
-    def load_data(self, event_path):
+    def __load_data(self, event_path):
         """Returns dataframe with raw data."""
-        # It's not sure that time for MOA data is in HJD
+        # I'm not sure that time for MOA data is in HJD
         with open(event_path) as f:
             contents = f.readlines()
             processed = ''
@@ -362,17 +416,21 @@ class MOAData(Data):
             # Remove the random rows with zero time and negative time
             t = t[t['HJD'] > 0]
 
-        self.tables.append(t)
-        self.masks = [np.ones(len(t['HJD']), dtype=bool)]
+            # Add mask column
+            mask = Table.Column(np.ones(len(t['HJD']), dtype=bool), name='mask', 
+                dtype=bool)
+            t.add_column(mask)  # Insert before the first table column
+
+        self._Data__tables.append(t)
 
 class KMTData(Data):
     """Subclass of data class for dealing with OGLE data."""
     def __init__(self, event_dir):
         super(KMTData, self).__init__(event_dir)
-        self.load_data(event_dir)
-        self.units = 'fluxes'
+        self.__load_data(event_dir)
+        self.__units = 'fluxes'
 
-    def load_data(self, event_dir):
+    def __load_data(self, event_dir):
         """Returns a table with raw data."""
         t1 = Table.read(event_dir + '/KMTA01_I.diapl', format='ascii')
         t1['col1'] += 2450000
@@ -398,19 +456,22 @@ class KMTData(Data):
         t3.rename_column('col3', 'flux_err')
         t3.meta = {'filter':'I', 'observatory':'KMTS'}
 
-        self.tables = [t1, t2, t3]
-        self.masks = [np.ones(len(t1['HJD']), dtype=bool), 
-            np.ones(len(t2['HJD']), dtype=bool),
-            np.ones(len(t3['HJD']), dtype=bool)]
+        self._Data__tables = [t1, t2, t3]
+
+        for t in  self._Data__tables:
+            # Add mask column
+            mask = Table.Column(np.ones(len(t['HJD']), dtype=bool), name='mask', 
+                dtype=bool)
+            t.add_column(mask)  # Insert before the first table column
 
 class NASAExoArchiveData(Data):
     """Subclass of data class for dealing with data from NASA Exo Archive."""
     def __init__(self, event_dir):
         super(NASAExoArchiveData, self).__init__(event_dir)
-        self.load_data(event_dir)
-        self.units = 'magnitudes'
+        self.__load_data(event_dir)
+        self._Data__units = 'magnitudes'
 
-    def load_data(self, event_dir):
+    def __load_data(self, event_dir):
         """Returns tables with raw data."""
         count = 0
         for file in os.listdir(event_dir):
@@ -425,7 +486,7 @@ class NASAExoArchiveData(Data):
                     raise ValueError("No column named HJD or JD.")
 
                 if (t.colnames[1]=='Relative_Flux'):
-                    m, m_err = self.fluxes_to_magnitudes(t['Relative_Flux'],
+                    m, m_err = self.__fluxes_to_magnitudes(t['Relative_Flux'],
                         t['Relative_Flux_Uncertainty'])
                     t['Relative_Flux'] = m
                     t['Relative_Flux_Uncertainty'] = m_err
@@ -445,17 +506,17 @@ class NASAExoArchiveData(Data):
                 if (count==0):
                     ra = info['RA']['value']
                     dec = info['DEC']['value']
-                    self.coordinates = SkyCoord(ra, dec)        
+                    self.__coordinates = SkyCoord(ra, dec)        
                 elif(ra!=info['RA']['value'] or\
                          dec!=info['DEC']['value']):
-                    raise ValueError("Event coordinates don't match between\
-                         different datasets. ")
+                    raise ValueError("Event coordinates don't match between"
+                         "different datasets. ")
 
                 # Save event name
                 if (count==0):
-                    self.event_name = info['STAR_ID']['value']
-                elif (self.event_name!=info['STAR_ID']['value']):
-                    self.event_name += info['keywords']['STAR_ID']['value']
+                    self.__event_name = info['STAR_ID']['value']
+                elif (self.__event_name!=info['STAR_ID']['value']):
+                    self.__event_name += info['keywords']['STAR_ID']['value']
                     
                 # Check that all times are HJD in epoch J2000.0    
                 if (info['EQUINOX']['value']!="J2000.0"):
@@ -472,8 +533,11 @@ class NASAExoArchiveData(Data):
 
                 t = Table(t, masked=False)
 
-                self.tables.append(t)
-                self.masks.append(np.ones(len(t['HJD']), dtype=bool))
-                
-                count = count + 1
+                # Add mask column
+                mask = Table.Column(np.ones(len(t['HJD']), dtype=bool),
+                    name='mask', dtype=bool)
+                t.add_column(mask)  # Insert before the first table column
 
+                self._Data__tables.append(t)
+
+                count = count + 1
