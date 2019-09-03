@@ -15,7 +15,10 @@ class Data(object):
     Subclasses should overload the :func:`Data.__load_data`. The time series
     data is stored as a list of Astropy tables, one for each photometric filter.
     """
-    def __init__(self, event_dir=""):
+    def __init__(
+        self, 
+        event_dir=None
+    ):
         self.__tables = []
         self.__event_name = ""
         self.__coordinates = None
@@ -70,7 +73,7 @@ class Data(object):
         else:
             for table in self.__tables:
                 F, F_err = self.__magnitudes_to_fluxes(table['mag'], 
-                    table['mag_err'], zero_point=22.)
+                    table['mag_err'])
 
                 table.rename_column('mag', 'flux')
                 table.rename_column('mag_err', 'flux_err')
@@ -90,7 +93,7 @@ class Data(object):
         else:
             for table in self.__tables:
                 m, m_err = self.__fluxes_to_magnitudes(table['flux'], 
-                    table['flux_err'], zero_point=22.)
+                    table['flux_err'])
 
                 table.rename_column('flux', 'mag')
                 table.rename_column('flux_err', 'mag_err')
@@ -139,7 +142,7 @@ class Data(object):
 
         return mu_F, sig_F    
 
-    def __fluxes_to_magnitudes(self, F, sig_F, zero_point=22):
+    def __fluxes_to_magnitudes(self, F, sig_F, zero_point=22.):
         """
         Given the mean and the standard deviation of a measured flux 
         which is assumed to be log-normal distributed, and a reference magnitude,
@@ -177,15 +180,14 @@ class Data(object):
         flux units, rescaled to zero  median and unit variance, a format which 
         is more suitable for subsequent modeling.
         """
-        if not (self.__units=='fluxes'):
-            self.__convert_data_to_fluxes()
+        if not (self.units=='fluxes'):
+            self.units = 'fluxes'
 
         # Subtract the median from the data such that baseline is at approx 
         # zero, rescale the data such that it has unit variance
         stanardized_data = []
         for i, table in enumerate(self.__tables):
             mask = table['mask']
-
             table_std = Table()
             table_std.meta = table.meta
             table_std['HJD'] = table['HJD'][mask] - 2450000
@@ -338,7 +340,10 @@ class Data(object):
     
 class OGLEData(Data):
     """Subclass of data class for dealing with OGLE data."""
-    def __init__(self, event_dir):
+    def __init__(
+        self, 
+        event_dir=None
+    ):
         super(OGLEData, self).__init__(event_dir)
         with open(event_dir + '/params.dat') as f:
             lines = f.readlines() 
@@ -373,7 +378,11 @@ class OGLEData(Data):
 
 class MOAData(Data):
     """Subclass of data class for handling with MOA datasets."""
-    def __init__(self, event_path, index_path):
+    def __init__(
+        self, 
+        event_path=None, 
+        index_path=None
+    ):
         super(MOAData, self).__init__(event_path)
         self._Data__units = 'fluxes'
 
@@ -425,7 +434,10 @@ class MOAData(Data):
 
 class KMTData(Data):
     """Subclass of data class for dealing with OGLE data."""
-    def __init__(self, event_dir):
+    def __init__(
+        self, 
+        event_dir=None
+    ):
         super(KMTData, self).__init__(event_dir)
         self.__load_data(event_dir)
         self.__units = 'fluxes'
@@ -466,7 +478,10 @@ class KMTData(Data):
 
 class NASAExoArchiveData(Data):
     """Subclass of data class for dealing with data from NASA Exo Archive."""
-    def __init__(self, event_dir):
+    def __init__(
+        self, 
+        event_dir=None
+    ):
         super(NASAExoArchiveData, self).__init__(event_dir)
         self.__load_data(event_dir)
         self._Data__units = 'magnitudes'
