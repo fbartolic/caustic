@@ -4,6 +4,7 @@ import matplotlib as mpl
 import exoplanet as xo
 import pymc3 as pm
 import theano.tensor as T
+import caustic as ca
 import os
 
 mpl.rc('font',**{'family':'serif','serif':['Palatino']})
@@ -43,7 +44,7 @@ def construct_masked_tensor(array_list):
             have the same dimension')
 
     n_max =  np.max([len(array) for array in array_list])
-    tensor = T._shared(np.stack([np.pad(array, 
+    tensor = T.as_tensor_variable(np.stack([np.pad(array, 
         (0, n_max - len(array)), 'constant', 
         constant_values=(0.,)) for array in array_list]))
     
@@ -56,13 +57,13 @@ def construct_masked_tensor(array_list):
             )
         masks_list.append(array)
 
-    mask = T._shared(np.stack(masks_list).astype('int8'))
+    mask = T.as_tensor_variable(np.stack(masks_list).astype('int8'))
 
     return tensor, mask
 
-def guess_t0(event):
+def estimate_t0(event):
     """
-    Guesses an intial value for the t0 parameter. This is necessary because
+    Estimates the initial value for the t0 parameter. This is necessary because
     the posterior is highly multi-modal in t0 and the sampler usually
     fails to converge if t0 is not close to true value.
     """
@@ -80,7 +81,37 @@ def guess_t0(event):
 
     return guess
 
-def plot_model_and_residuals(ax, event, pm_model, trace, time_span=None, 
+def revert_flux_params_to_nonstandardized_format(data, Delta_F, F_base, u_0):
+    # Revert F_base and Delta_F to non-standardized units
+    data.units = 'fluxes'
+    fluxes_median = np.zeros(len(data.light_curves))
+    fluxes_std = np.zeros(len(data.light_curves))
+
+    for i, table in enumerate(data.light_curves):
+        mask = table['mask']
+        fluxes_median[i] = np.median(table['flux'][mask])
+        fluxes_std[i] = np.std(table['flux'][mask])
+
+    # Flux parameters to standard flux units 
+    Delta_F_ = T.as_tensor_variable(fluxes_std)*Delta_F 
+    F_base_ = T.as_tensor_variable(fluxes_std)*F_base +\
+        T.as_tensor_variable(fluxes_median)
+
+    # Calculate source flux and blend flux
+    A_u0 = (u_0**2 + 2)/(T.abs_(u_0)*T.sqrt(u_0**2 + 4))
+
+    F_S = Delta_F_/(A_u0 - 1)
+    F_B = F_base_ - F_S
+
+    g = F_B/F_S
+
+    # Convert fluxes to magnitudes
+    zero_point = 22.
+    m_source = zero_point - 2.5*T.log10(F_S)
+
+    return m_source, g
+    
+def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction, 
         n_samples=50, **kwargs):
     """
     Plots model in data space given samples from the posterior 
@@ -94,158 +125,131 @@ def plot_model_and_residuals(ax, event, pm_model, trace, time_span=None,
     ----------
     ax : matplotlib.axes 
         Needs to be of shape (2, 1).
-    event : caustic.data 
+    data : caustic.data 
         Microlensing event data. 
     pm_model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
         trace.
     trace : PyMC3 MultiTrace object
         Trace object containing samples from posterior.
-    time_span : list
-        Timespan for which the model is to be evaluated [t_begin, t_end].
+    t_grid : theano.tensor
+        Times at which we want to evaluate model predictions. Shape 
+        (n_bands, n_pts).
+    prediction : theano.tensor
+        Model prediction evaluated at t_grid.
     n_samples: int
         Number of posterior draws to be plotted.
     """
     # Load standardized data
-    tables = event.get_standardized_data()
+    tables = data.get_standardized_data()
 
-    # Compute model predictions on a fine grid and at observed times
-    with pm_model as model_instance:
-        if time_span is None:
-            time_span = [model_instance.t_begin, model_instance.t_end]
+    # Evaluate model for each sample on a fine grid
+    n_pts_dense = T.shape(t_grid)[1].eval()
+    n_bands = len(data.light_curves)
 
-        t_grids = [np.linspace(time_span[0], time_span[1],
-            2000) for table in tables]
-        t_observed = [np.array(table['HJD']) for table in tables]
+    prediction_eval = np.zeros((n_samples, n_bands, n_pts_dense))
 
-        pred = model_instance.evaluate_posterior_model_on_grid(trace, t_grids, 
-            n_samples)
-        pred_at_observed_times = model_instance.evaluate_posterior_model_on_grid(trace,
-            t_observed, n_samples=100) # more samples needed for accurate median
+    with pm_model:
+        for i, sample in enumerate(xo.get_samples_from_trace(trace, 
+                size=n_samples)):
+            prediction_eval[i] = xo.eval_in_model(prediction, sample)
+
+    # Plot model predictions for each different samples from posterior on dense 
+    # grid 
+    for n in range(n_bands): # iterate over bands
+        for i in range(n_samples):
+            ax[0].plot(t_grid[n].eval(), prediction_eval[i, n, :],
+                color='C' + str(n), alpha=0.2, **kwargs)
+
+    # Compute median of the predictions
+    median_predictions = np.zeros((n_bands, n_pts_dense))
+    for n in range(n_bands): 
+        median_predictions[n] = np.percentile(prediction_eval[n],
+            [16, 50, 84], axis=0)[1]
 
     # Plot data
-    event.plot_standardized_data(ax[0])
+    data.plot_standardized_data(ax[0])
     ax[0].set_xlabel(None)
     ax[1].set_xlabel('HJD - 2450000')
     ax[1].set_ylabel('Residuals')
-
-    for a in ax.ravel():
-        a.set_xlim(t_grids[0][0], t_grids[0][-1])
-
-    # Plot predictions for various samples
-    for n in range(model_instance.n_bands): # iterate over bands
-        for i in range(n_samples):
-            ax[0].plot(t_grids[n], pred[n][i, :], color='C' + str(n), 
-                alpha=0.2, **kwargs)
                 
-    # Calculate and plot residuals
-    for n in range(model_instance.n_bands): # iterate over bands
-        quantile_predictions = np.percentile(pred_at_observed_times[n],
-            [16, 50, 84], axis=0)
+    # Compute residuals with respect to median model 
+    for n in range(n_bands): 
+        # Interpolate median predictions onto a grid of observed times
+        median_pred_interp = np.interp(tables[n]['HJD'], 
+            t_grid[n].eval(), median_predictions[n]) 
 
-        residuals =  tables[n]['flux'] - quantile_predictions[1]
+        residuals =  tables[n]['flux'] - median_pred_interp
+
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
             fmt='o', color='C' + str(n), alpha=0.5, **kwargs)
         ax[1].grid(True)
 
-def plot_map_model_and_residuals(ax, event, pm_model, map_point, time_span=None,
-        **kwargs):
+def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid, 
+        prediction, **kwargs):
     """
-    Plots model in data space given MAP parameters of the model. Also plots 
-    residuals with respect to MAP model. All extra keyword arguments are passed
-    to the matplotlib plot function.
+    Plots model in data space given samples from the posterior 
+    distribution. Also plots residuals with respect to the median model, where 
+    the median model is the median of multiple posterior draws of the model 
+    in data space, rather then a single draw corresponding to median values of
+    all parameters. All extra keyword arguments are passed to the matplotlib
+    plot function.
     
     Parameters
     ----------
     ax : matplotlib.axes 
         Needs to be of shape (2, 1).
-    event : caustic.data 
+    data : caustic.data 
         Microlensing event data. 
     pm_model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
         trace.
     map_point : dict 
-        Dictionary containing the MAP values of model parameters.
-    time_span : list
-        Timespan for which the model is to be evaluated [t_begin, t_end].
+        Point in the parameter space for which we want to evaluate the 
+        prediction tensor.
+    t_grid : theano.tensor
+        Times at which we want to evaluate model predictions. Shape 
+        (n_bands, n_pts).
+    prediction : theano.tensor
+        Model prediction evaluated at t_grid.
+    n_samples: int
+        Number of posterior draws to be plotted.
     """
     # Load standardized data
-    tables = event.get_standardized_data()
-    
-    # Compute model predictions on a fine grid and at observed times
-    with pm_model as model_instance:
-        if time_span is None:
-            time_span = [model_instance.t_begin, model_instance.t_end]
+    tables = data.get_standardized_data()
 
-        t_grids = [np.linspace(time_span[0], time_span[1],
-            2000) for table in tables]
-        t_observed = [table['HJD'] for table in tables]
+    # Evaluate model for each sample on a fine grid
+    n_pts_dense = T.shape(t_grid)[1].eval()
+    n_bands = len(data.light_curves)
 
-        pred = model_instance.evaluate_map_model_on_grid(t_grids, map_point)
-        pred_at_observed_times = model_instance.evaluate_map_model_on_grid(
-            t_observed, map_point)
+    prediction_eval = np.zeros((n_bands, n_pts_dense))
+
+    with pm_model:
+        prediction_eval = xo.eval_in_model(prediction, map_point)
+
+    # Plot model predictions for each different samples from posterior on dense 
+    # grid 
+    for n in range(n_bands): # iterate over bands
+        ax[0].plot(t_grid[n].eval(), prediction_eval[n, :],
+            color='C' + str(n), **kwargs)
 
     # Plot data
-    event.plot_standardized_data(ax[0])
+    data.plot_standardized_data(ax[0])
     ax[0].set_xlabel(None)
     ax[1].set_xlabel('HJD - 2450000')
     ax[1].set_ylabel('Residuals')
+                
+    # Compute residuals with respect to median model 
+    for n in range(n_bands): 
+        # Interpolate median predictions onto a grid of observed times
+        map_prediction_interp = np.interp(tables[n]['HJD'], 
+            t_grid[n].eval(), prediction_eval[n]) 
 
-    # Plot predictions for various samples
-    for n in range(model_instance.n_bands): # iterate over bands
-        ax[0].plot(t_grids[n], pred[n], color='C' + str(n), **kwargs)
+        residuals =  tables[n]['flux'] - map_prediction_interp
 
-    # Calculate and plot residuals
-    for n in range(model_instance.n_bands): # iterate over bands
-        residuals = np.array(tables[n]['flux']) - pred_at_observed_times[n]
         ax[1].errorbar(tables[n]['HJD'], residuals, tables[n]['flux_err'],
             fmt='o', color='C' + str(n), alpha=0.5, **kwargs)
         ax[1].grid(True)
-
-def plot_prior_model_samples(ax, event, pm_model, n_samples, time_span=None,
-        **kwargs):
-    """
-    Plots model in data space given samples drawn from the prior probability
-    distribution. This is useful debugging prior choices. All extra keyword
-    arguments are passed to the matplotlib plot function.
-    
-    Parameters
-    ----------
-    ax : matplotlib.axes
-        Single matplotlib axes object.
-    event : caustic.data
-        Microlensing event data. Although this functions plots draws from the
-        prior, some of the priors depend on the data in a simple way so a
-        data object is still needed.
-    pm_model : pymc3.Model
-        PyMC3 model object. Needs to work with `sample_prior_predictive` method
-        from PyMC3.
-    time_span : list
-        Timespan for which the model is to be evaluated [t_begin, t_end].
-    n_samples : int
-        Number of samples from prior.
-    """
-    # Load standardized data
-    tables = event.get_standardized_data()
-
-    # Sample from the prior
-    with pm_model as model_instance:
-        if time_span is None:
-            time_span = [model_instance.t_begin, model_instance.t_end]
-
-        t_grids = [np.linspace(time_span[0], time_span[1],
-            2000) for table in tables]
-
-        trace = pm.sample_prior_predictive(n_samples)
-        predictions = model_instance.evaluate_prior_model_on_grid(trace, t_grids)
-
-    # Plot predictions for various samples
-    for i in range(n_samples):
-        for n in range(model_instance.n_bands): # iterate over bands
-            ax.plot(t_grids[n], predictions[n][i, :], color='C' + str(n), 
-                alpha=0.5, **kwargs)
-
-    ax.set_xlabel('HJD - 2450000')
 
 def plot_histograms_of_prior_samples(event, pm_model, output_dir):
     """
@@ -313,13 +317,13 @@ def plot_trajectory(ax, pm_model, trace, n_samples=50, time_span=None,
         Number of posterior draws to be plotted.
     """
     # Compute model predictions on a fine grid 
-    with pm_model as model_instance:
+    with pm_model as m:
         if time_span is None:
-            time_span = [model_instance.t_begin, model_instance.t_end]
+            time_span = [m.t_begin, m.t_end]
 
         t_grid = np.linspace(time_span[0], time_span[1])
 
-        pred = model_instance.evaluate_trajectory_on_grid(trace, t_grid, 
+        pred = m.evaluate_trajectory_on_grid(trace, t_grid, 
             n_samples)
 
     ax.set_xlabel(r'$u_e\,[\theta_E]$')
@@ -364,7 +368,7 @@ def remove_outliers(pm_model, event):
         map_soln = xo.optimize(start=map_soln, vars=[pm_model.u0, pm_model.teff])
         map_soln = xo.optimize(start=map_soln)
 
-        t_observed = [T._shared(table['HJD']) for table in event.tables]
+        t_observed = [T.as_tensor_variable(table['HJD']) for table in event.tables]
         pred_at_observed_times = pm_model.evaluate_map_model_on_grid(
             t_observed, map_soln)
 
