@@ -258,7 +258,7 @@ def plot_histograms_of_prior_samples(event, pm_model, output_dir):
     
     Parameters
     ----------
-    event : caustic.data
+    data : caustic.data
         Microlensing event data. Although this functions plots draws from the
         prior, some of the priors depend on the data in a simple way so a
         data object is still needed.
@@ -294,6 +294,52 @@ def plot_histograms_of_prior_samples(event, pm_model, output_dir):
             label = key
             ax.hist(value, bins=30);
             plt.savefig(directory + label + '.png')
+
+def compute_invgamma_params(data):
+    """
+    Returns parameters of an inverse zeta distribution p(x) such that 
+    0.1% of total prob. mass is assigned to values of t < t_min and 
+    1% of total prob. masss  to values greater than t_tmax. t_min is defined
+    to be the median spacing between consecutive data points in the time series 
+    and t_max is the total duration of the time series.
+    
+    Parameters
+    ----------
+    data : caustic.data 
+        Microlensing event data. 
+   
+    Returns
+    -------
+    tuple
+        (inv_gamma_a, inv_gamma_b) where each of the parameters has shape 
+        (n_bands, 1).
+    """
+    from scipy.stats import invgamma
+    from scipy.optimize import fsolve
+
+    def solve_for_params(params, x_min, x_max):
+        lower_mass = 0.01
+        upper_mass = 0.99
+
+        # Trial parameters
+        alpha, beta = params
+
+        # Equation for the roots defining params which satisfy the constraint
+        return (invgamma.cdf(x_min, alpha, scale=beta) - \
+            lower_mass, invgamma.cdf(x_max, alpha, scale=beta) - upper_mass)
+
+    # Compute parameters for the prior on GP hyperparameters
+    n_bands = len(data.light_curves)
+    invgamma_a = np.zeros(n_bands)
+    invgamma_b = np.zeros(n_bands)
+
+    for i in range(n_bands):
+        t_ = data.light_curves[i]['HJD'] - 2450000
+        invgamma_a[i], invgamma_b[i] = fsolve(solve_for_params, 
+            (0.1, 0.1), (np.median(np.diff(t_)), t_[-1] - t_[0]))
+
+    return (T.as_tensor_variable(invgamma_a.reshape((n_bands, 1))),
+        T.as_tensor_variable(invgamma_b.reshape((n_bands, 1))))
 
 def plot_trajectory(ax, pm_model, trace, n_samples=50, time_span=None,
         **kwargs):
