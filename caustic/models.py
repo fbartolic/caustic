@@ -132,7 +132,7 @@ class SingleLensModel(pm.Model):
             testval=2.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
         
-    def compute_log_likelihood(self, r, var_F, kernel=None):
+    def compute_log_likelihood(self, r, var_F, kernel=None, **kwargs):
         """"
         Computes the total log likelihood of the model assuming that the 
         observations in different bands are independent. 
@@ -154,93 +154,78 @@ class SingleLensModel(pm.Model):
         ll = 0 
         # Iterate over all observed bands
         for i in range(self.n_bands):
-            t = self.t[i][self.mask[i].nonzero()]
+            t_ = self.t[i][self.mask[i].nonzero()]
             r_ = r[i][self.mask[i].nonzero()]
+            var_F_ = var_F[i][self.mask[i].nonzero()]
 
             if (kernel==None):
-                ll += -0.5*T.sum(r_**2/var_F) -\
-                    0.5*T.sum(T.log(2*np.pi*var_F))
-
-            elif (kernel=='matern32'):
-                kernel = terms.Matern32Term(sigma=self.sigma, rho=self.rho)
-                gp = GP(kernel, t, var_F, J=2) # J=2 for matern32 kernel
-                ll += gp.log_likelihood(r_)
-            
+                ll += -0.5*T.sum(r_**2/var_F_) -\
+                    0.5*T.sum(T.log(2*np.pi*var_F_))
             else:
-                raise ValueError('Specified kernel not recognized.')
-        
+                gp = GP(kernel, t_, var_F_, **kwargs) 
+                ll += gp.log_likelihood(r_)
         return ll
     
-    def compute_marginalized_log_likelihood(self, magnification, var_F):
+    def compute_marginalized_log_likelihood(self, magnification, var_F, L):
         """
-        Computes log likelihood marginalized over the linear flux parameters.
-        """
-#        def log_likelihood_single_band(F, var_F, mag, mask):
-#        F = F[mask.nonzero()]
-#        var_F = var_F[mask.nonzero()]
-#        mag = mag[mask.nonzero()]
-
-        T.printing.Print('magnification shape')(T.shape(magnification))
-
-
-        F = self.F[0][self.mask[0].nonzero()]
-        var_F = var_F[0][self.mask[0].nonzero()]
-        mag = magnification[0][self.mask[0].nonzero()]
-
-        T.printing.Print('F shape')(T.shape(F))
-        T.printing.Print('var_F shape')(T.shape(var_F))
-        T.printing.Print('mag shape')(T.shape(mag))
-        T.printing.Print('mask shape')(T.shape(self.mask))
-        T.printing.Print('mag values')(mag)
-
-        N = T.shape(F)[0]
-        # Linear parameter matrix
-#        mu_theta = T.dot(mag_vector, np.max(self.F))
-        A = T.stack([mag, T.ones_like(F)], axis=1)
-
-        # Covariance matrix
-        C_diag = var_F
-        C = T.nlinalg.diag(C_diag)
-
-        # Prior matrix
-        sigDelta_F = 10.
-        sig_F_base = 0.1
-        L_diag = T.as_tensor_variable(np.array([sigDelta_F, sig_F_base])**2.)
-        L = T.nlinalg.diag(L_diag)
-
-        T.printing.Print('got this far')(T.shape(F))
-
-        # Calculate inverse of covariance matrix for marginalized likelihood
-        inv_C = T.nlinalg.diag(T.pow(C_diag, -1.))
-        ln_detC = T.log(C_diag).sum()
-
-        inv_L = T.nlinalg.diag(T.pow(L_diag, -1.))
-        ln_detL = T.log(L_diag).sum()
-
-        S = inv_L + T.dot(A.transpose(), T.dot(inv_C, A))
-        inv_S = T.nlinalg.matrix_inverse(S)
-        ln_detS = T.log(T.nlinalg.det(S))
-
-        inv_SIGMA =inv_C -\
-            T.dot(inv_C, T.dot(A, T.dot(inv_S, T.dot(A.transpose(), inv_C))))
-        ln_detSIGMA = ln_detC + ln_detL + ln_detS
-
-#        # Calculate marginalized likelihood
-        r = F #- mu_theta
-        ll = -0.5*T.dot(r.transpose(), T.dot(inv_SIGMA, r)) -\
-            0.5*N*np.log(2*np.pi) - 0.5*ln_detSIGMA
-
-        T.printing.Print('success')(ll)
+        Computes the multivariate guassian log-likelihood analytically 
+        marginalized over the linear flux parameters. 
         
-        return ll
-#
-#        # Compute the log-likelihood which is additive across different bands
-#        ll = 0 
-#        for i in range(self.n_bands):
-#            ll += log_likelihood_single_band(self.F[i], 
-#                var_F[i], magnification[i], self.mask[i])
-#
-#        return ll 
+        Parameters
+        ----------
+        magnification : theano.tensor
+            Computed magnification, shape (n_bands, max_npoints).
+        var_F : theano.tensor
+            Diagonal elements of the covariance matrix, shape (n_bands, 
+            max_npoints).
+        L : theano.tensor
+            Covariance matrix for the multivariate gaussian prior on the linear
+            flux parameters. The Gaussian prior is a requirement to make
+            the analytical marginalization tractable. The prior is assumed to
+            be equal for all bands, hence the matrix needs to be (2, 2).
+        """
+        def log_likelihood_single_band(F, var_F, mag, mask):
+            F = F[mask.nonzero()]
+            var_F = var_F[mask.nonzero()]
+            mag = mag[mask.nonzero()]
+
+            N = T.shape(F)[0]
+
+            # Linear parameter matrix
+            A = T.stack([mag, T.ones_like(F)], axis=1)
+
+            # Covariance matrix
+            C_diag = var_F
+            C = T.nlinalg.diag(C_diag)
+
+            # Calculate inverse of covariance matrix for marginalized likelihood
+            inv_C = T.nlinalg.diag(T.pow(C_diag, -1.))
+            ln_detC = T.log(C_diag).sum()
+
+            inv_L = T.nlinalg.diag(T.pow(T.nlinalg.diag(L), -1.))
+            ln_detL = T.log(T.nlinalg.diag(L)).sum()
+
+            S = inv_L + T.dot(A.transpose(), T.dot(inv_C, A))
+            inv_S = T.nlinalg.matrix_inverse(S)
+            ln_detS = T.log(T.nlinalg.det(S))
+
+            inv_SIGMA =inv_C -\
+                T.dot(inv_C, T.dot(A, T.dot(inv_S, T.dot(A.transpose(), inv_C))))
+            ln_detSIGMA = ln_detC + ln_detL + ln_detS
+
+            # Calculate marginalized likelihood
+            ll = -0.5*T.dot(F.transpose(), T.dot(inv_SIGMA, F)) -\
+                0.5*N*np.log(2*np.pi) - 0.5*ln_detSIGMA
+
+            return ll
+
+        # Compute the log-likelihood which is additive across different bands
+        ll = 0 
+        for i in range(self.n_bands):
+            ll += log_likelihood_single_band(self.F[i], 
+                var_F[i], magnification[i], self.mask[i])
+
+        return ll 
 
     def generate_mock_dataset(self):
         """
