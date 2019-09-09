@@ -112,7 +112,7 @@ def revert_flux_params_to_nonstandardized_format(data, Delta_F, F_base, u_0):
     return m_source, g
     
 def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction, 
-        n_samples=50, **kwargs):
+        n_samples=50, gp_list=None, **kwargs):
     """
     Plots model in data space given samples from the posterior 
     distribution. Also plots residuals with respect to the median model, where 
@@ -139,6 +139,10 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
         Model prediction evaluated at t_grid.
     n_samples: int
         Number of posterior draws to be plotted.
+    gp_list : list
+        List of `exoplanet.gp.GP` objects, one per each band. If these
+        are provided the likelihood which is computed is the GP marginal
+        likelihood.
     """
     # Load standardized data
     tables = data.get_standardized_data()
@@ -149,10 +153,25 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
 
     prediction_eval = np.zeros((n_samples, n_bands, n_pts_dense))
 
-    with pm_model:
-        for i, sample in enumerate(xo.get_samples_from_trace(trace, 
-                size=n_samples)):
-            prediction_eval[i] = xo.eval_in_model(prediction, sample)
+    # Evaluate predictions in model context
+    if gp_list==None:
+        with pm_model:
+            for i, sample in enumerate(xo.get_samples_from_trace(trace, 
+                    size=n_samples)):
+                prediction_eval[i] = xo.eval_in_model(prediction, sample)
+
+    else:
+        with pm_model:
+            prediction_tensors =\
+                [gp_list[n].predict(t_grid[n]) for n in range(n_bands)]
+            for i, sample in enumerate(xo.get_samples_from_trace(trace, 
+                    size=n_samples)):
+                for n in range(n_bands):
+                    prediction_eval[i, n] =\
+                        xo.eval_in_model(prediction_tensors[n], sample) 
+
+                # Add mean model to GP prediction
+                prediction_eval[i] += xo.eval_in_model(prediction, sample)
 
     # Plot model predictions for each different samples from posterior on dense 
     # grid 
@@ -186,7 +205,7 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
         ax[1].grid(True)
 
 def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid, 
-        prediction, **kwargs):
+        prediction, gp_list, **kwargs):
     """
     Plots model in data space given samples from the posterior 
     distribution. Also plots residuals with respect to the median model, where 
@@ -212,8 +231,10 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
         (n_bands, n_pts).
     prediction : theano.tensor
         Model prediction evaluated at t_grid.
-    n_samples: int
-        Number of posterior draws to be plotted.
+    gp_list : list
+        List of `exoplanet.gp.GP` objects, one per each band. If these
+        are provided the likelihood which is computed is the GP marginal
+        likelihood.
     """
     # Load standardized data
     tables = data.get_standardized_data()
@@ -224,8 +245,18 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
 
     prediction_eval = np.zeros((n_bands, n_pts_dense))
 
-    with pm_model:
-        prediction_eval = xo.eval_in_model(prediction, map_point)
+    if gp_list==None:
+        with pm_model:
+            prediction_eval = xo.eval_in_model(prediction, map_point)
+
+    else:
+        with pm_model:
+            for n in range(n_bands):
+                prediction_eval[n] =\
+                    xo.eval_in_model(gp_list[n].predict(t_grid[n]), map_point) 
+
+            # Add mean model to GP prediction
+            prediction_eval += xo.eval_in_model(prediction, map_point)
 
     # Plot model predictions for each different samples from posterior on dense 
     # grid 

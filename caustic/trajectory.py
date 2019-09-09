@@ -25,6 +25,7 @@ class Trajectory:
         pi_EE=None,
         pi_EN=None
     ):
+        self.data = data
         self.t_0 = t_0
         self.u_0 = u_0
         self.t_E = t_E
@@ -136,7 +137,7 @@ class Trajectory:
         zeta_e_list = []
         zeta_n_list = []
 
-        for idx in range(self.n_bands):
+        for idx in range(len(self.data.light_curves)):
             # the interpolation function requires tensor of shape (n_points, 1)
             # as an input 
             pts = T.reshape(t[idx], (T.shape(t[idx])[0], 1))

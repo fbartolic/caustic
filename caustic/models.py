@@ -132,7 +132,7 @@ class SingleLensModel(pm.Model):
             testval=2.*T.ones((self.n_bands, 1)),
             shape=(self.n_bands, 1))
         
-    def compute_log_likelihood(self, r, var_F, kernel=None, **kwargs):
+    def compute_log_likelihood(self, r, var_F, gp_list=None, **kwargs):
         """"
         Computes the total log likelihood of the model assuming that the 
         observations in different bands are independent. 
@@ -145,6 +145,10 @@ class SingleLensModel(pm.Model):
             Residuals of the mean model with respect to the data.
         var_F : theano.tensor
             Diagonal elements of the covariance matrix. 
+        gp_list : list
+            List of `exoplanet.gp.GP` objects, one per each band. If these
+            are provided the likelihood which is computed is the GP marginal
+            likelihood.
 
         Returns
         -------
@@ -154,16 +158,14 @@ class SingleLensModel(pm.Model):
         ll = 0 
         # Iterate over all observed bands
         for i in range(self.n_bands):
-            t_ = self.t[i][self.mask[i].nonzero()]
             r_ = r[i][self.mask[i].nonzero()]
             var_F_ = var_F[i][self.mask[i].nonzero()]
 
-            if (kernel==None):
+            if (gp_list==None):
                 ll += -0.5*T.sum(r_**2/var_F_) -\
                     0.5*T.sum(T.log(2*np.pi*var_F_))
             else:
-                gp = GP(kernel, t_, var_F_, **kwargs) 
-                ll += gp.log_likelihood(r_)
+                ll += gp_list[i].log_likelihood(r_)
         return ll
     
     def compute_marginalized_log_likelihood(self, magnification, var_F, L):
