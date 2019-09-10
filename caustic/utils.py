@@ -3,6 +3,7 @@ from matplotlib import pyplot as plt
 import matplotlib as mpl
 import exoplanet as xo
 import pymc3 as pm
+import theano
 import theano.tensor as T
 import caustic as ca
 import os
@@ -282,6 +283,67 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
             fmt='o', color='C' + str(n), alpha=0.5, **kwargs)
         ax[1].grid(True)
 
+def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e, 
+        n_samples=50, color='C0', **kwargs):
+    """
+    Plots the trajectory of the lens with respect to the source on the plane of
+    the sky given samples from the posterior probability distribution. All 
+    extra keyword arguments are passed to the matplotlib plot function.
+    
+    Parameters
+    ----------
+    ax : matplotlib.axes 
+        Needs to be of shape (2, 1).
+    data : caustic.data 
+        Microlensing event data. 
+    pm_model : pymc3.Model
+        PyMC3 model object which was used to obtain posterior samples in the
+        trace.
+    trace : PyMC3 MultiTrace object
+        Trace object containing samples from posterior.
+    t_grid : theano.tensor
+        Times at which we want to evaluate model predictions. Shape 
+        (n_bands, n_pts).
+    u_n : theano.tensor
+        North component of the trajectory vector u(t).
+    u_e : theano.tensor
+        East component of the trajectory vector u(t).
+    color : string
+        Color of the plotted samples.
+    n_samples: int
+        Number of posterior draws to be plotted.
+    """
+    # Evaluate model for each sample on a fine grid
+    n_pts_dense = T.shape(t_grid)[1].eval()
+
+    prediction_eval_u_n = np.zeros((n_samples, n_pts_dense))
+    prediction_eval_u_e = np.zeros((n_samples, n_pts_dense))
+
+    # Evaluate predictions in model context
+    with pm_model:
+        for i, sample in enumerate(xo.get_samples_from_trace(trace, 
+                size=n_samples)):
+            prediction_eval_u_n[i] = xo.eval_in_model(u_n, sample)
+            prediction_eval_u_e[i] = xo.eval_in_model(u_e, sample)
+
+    ax.set_xlabel(r'$u_e\,[\theta_E]$')
+    ax.set_ylabel(r'$u_n\,[\theta_E]$')
+    ax.axhline(0., color='grey')
+    ax.axvline(0., color='grey')
+    ax.set_xlim(-5, 5)
+    ax.set_ylim(-5, 5)
+
+    # Source star
+    circle = plt.Circle((0., 0.), 0.1, color='C1', zorder=2)
+    ax.add_artist(circle)
+
+    ax.grid()
+
+    # Plot predictions for various samples
+    for i in range(n_samples):
+        ax.plot(prediction_eval_u_e[i], prediction_eval_u_n[i], alpha=0.2, 
+            color=color, **kwargs)
+
 def plot_histograms_of_prior_samples(event, pm_model, output_dir):
     """
     Plots histograms of draws from prior distribution for each model parameter.
@@ -372,53 +434,128 @@ def compute_invgamma_params(data):
     return (T.as_tensor_variable(invgamma_a.reshape((n_bands, 1))),
         T.as_tensor_variable(invgamma_b.reshape((n_bands, 1))))
 
-def plot_trajectory(ax, pm_model, trace, n_samples=50, time_span=None,
-        **kwargs):
+def sample_with_emcee(pm_model, n_walkers=50, n_samples=10000, start=None):
     """
-    Plots different trajectories of the lens w.r. top the source on the plane
-    of the sky in (u_n, u_e) coordinates. All extra keyword arguments are 
-    passed to the plotting function.
+    Samples the model posterior distribution using emcee.
+            
+    Parameters
+    ----------
+    output_dir : str
+        Path to directory where the trace is to be saved, together with
+        various diagnostic plots and information. If it is not defined 
+        nothing will be saved.
+    n_walkers: int, optional
+        Number of walkers, by default 50.
+    n_samples : int, optional
+        Number of sampling steps, by default 10000.
+    start: dict, optional
+        Initial point in the parameter space at which the tuning steps
+        start.
+
+    Returns
+    -------
+    sampler object 
+        emcee sampler object 
+    """
+    import emcee 
+
+    # Print the names of the free parameters and the inital values
+    # of their log-priors        
+    free_parameters = [RV.name for RV in pm_model.basic_RVs]
+    initial_logps = [RV.logp(pm_model.test_point) for RV in pm_model.basic_RVs]
+    if np.any(np.isnan(initial_logps))==True:
+        print("Prior distributions misspecified, check that the test\
+            values are within the bounds of the prior.")
+
+    print("Free parameters:\n", free_parameters)
+
+    # DFM's hack for using emcee with PyMC3 models
+    f = theano.function(pm_model.vars,[pm_model.logpt] + pm_model.deterministics)
+
+    def log_prob_func(params):
+        dct = pm_model.bijection.rmap(params[::-1])
+        args = (dct[k.name] for k in pm_model.vars)
+        results = f(*args)
+        return tuple(results)
+
+    # First we work out the shapes of all of the deterministic variables
+    initial_params = pm.find_MAP()
+
+    # If custom initial parameters are specified, update relevant parameters
+    if start is not None:
+        for key in initial_params.keys():
+            if key in start.keys():
+                initial_params[key] = np.array([start[key]])
+
+    # For some reason, bijection.map flips the ordering of the variables
+    # from that in self.vars, hence [::-1]
+    vec = pm_model.bijection.map(initial_params)[::-1]
+    initial_blobs = log_prob_func(vec)[1:]
+    dtype = [(var.name, float, np.shape(b)) for var,
+            b in zip(pm_model.deterministics, initial_blobs)]
+    
+    # Then sample as usual
+    coords = vec + 1e-5 * np.random.randn(n_walkers, len(vec))
+    nwalkers, ndim = coords.shape
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob_func, 
+        blobs_dtype=dtype)
+    sampler.run_mcmc(coords, n_samples, progress=True)
+
+    return sampler
+
+def sample_with_dynesty(pm_model, prior_transform, sampler_kwargs={}, 
+        run_sampler_kwargs={}):
+    """
+    Samples the posterior distribution of a PyMC3 model using dynamic nested
+    sampling as implemented in dynesty. 
 
     Parameters
     ----------
-    ax : matplotlib.axes 
-        Needs to be of shape (1, 1).
-    pm_model : pymc3.Model
-        PyMC3 model object which was used to obtain posterior samples in the
-        trace.
-    trace : PyMC3 MultiTrace object
-        Trace object containing samples from posterior.
-    time_span : list
-        Timespan for which the model is to be evaluated [t_begin, t_end].
-    n_samples: int
-        Number of posterior draws to be plotted.
+    pm_model: pymc3.Model
+        PyMC3 model object defining the model we want to sample using dynesty.
+    prior_transform : function
+        Dyensty samples in a prior space where all parameters are i.i.d within
+        a a D-dimensional unit cube. For independent parameters, this would be 
+        the product of the inverse cumulative distribution function (CDF) 
+        associated with each parameter. The function `prior_transform` should
+        take an array of these uniformly distributed prior parameters and 
+        transform them according to the actual prior we'd like to use. See
+        the `dynesty` documentation for more details.
+    sampler_kwargs: dict
+        Additional arguments passed to the `dynesty.DynamicNestedSampler` 
+        method.
+    run_sampler_kwargs: dict
+        Additional arguments passed to the 
+        `dynesty.DynamicNestedSampler.run_nested` method.
+
+    Returns
+    -------
+    dynesty.results.Result
+        Object containing results of the Nested Sampling run. 
     """
-    # Compute model predictions on a fine grid 
-    with pm_model as m:
-        if time_span is None:
-            time_span = [m.t_begin, m.t_end]
+    import dynesty 
 
-        t_grid = np.linspace(time_span[0], time_span[1])
+    with pm_model:              
+        print("Model vars", pm_model.vars)
 
-        pred = m.evaluate_trajectory_on_grid(trace, t_grid, 
-            n_samples)
+        # Builds a theano function which takes the model parameters
+        # and returns the log likelihood
+        f = theano.function(pm_model.vars, [pm_model.potentials[0]])
+        
+        def log_likelihood(params):
+            dct = pm_model.bijection.rmap(params[::-1])
+            args = (dct[k.name] for k in pm_model.vars)
+            results = f(*args)
+            return tuple(results)[0]
+        
+        ndim = len(pm_model.vars)
+            
+        sampler = dynesty.DynamicNestedSampler(log_likelihood, 
+            prior_transform, ndim, **sampler_kwargs)
+        sampler.run_nested(wt_kwargs={'pfrac': 1.0}, print_progress=True, 
+            **run_sampler_kwargs)
 
-    ax.set_xlabel(r'$u_e\,[\theta_E]$')
-    ax.set_ylabel(r'$u_n\,[\theta_E]$')
-    ax.axhline(0., color='grey')
-    ax.axvline(0., color='grey')
-    ax.set_xlim(-5, 5)
-    ax.set_ylim(-5, 5)
-
-    # Source star
-    circle = plt.Circle((0., 0.), 0.1, color='C1', zorder=2)
-    ax.add_artist(circle)
-
-    ax.grid()
-
-    # Plot predictions for various samples
-    for i in range(n_samples):
-        ax.plot(pred[i, 0, :], pred[i, 1, :], alpha=0.2, **kwargs)
+    return sampler.results
 
 def remove_outliers(pm_model, event):
     """

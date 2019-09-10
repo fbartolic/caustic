@@ -166,7 +166,7 @@ class Trajectory:
 
         return delta_zeta_n, delta_zeta_e
 
-    def compute_trajectory(self, t):
+    def compute_trajectory(self, t, return_components=False):
         """
         Computes the magnitude of the relative lens-source separation vector
         u(t).         
@@ -176,15 +176,34 @@ class Trajectory:
         t : theano.tensor
             Tensor containing times for which u(t) is to be computed. Needs 
             to have shape (n_bands, npoints)
+        return_components : bool, optional
+            If true, the function returns the vector components (u_n, u_e)
+            of u(t) rather than its magnitude, by default False.
 
         Returns
         -------
         theano.tensor
-            The magnitude of the separation vector u(t) for each time.
+            The magnitude of the separation vector u(t) for each time or a 
+            tuple with the two components of u(t) in (north, east) basis.
         """
         if (self.pi_EE or self.pi_EN) is None:
             u = T.sqrt(self.u_0**2 + ((t - self.t_0)/self.t_E)**2)
             return u
+
+        elif return_components==True:
+            delta_zeta_n, delta_zeta_e = self.__compute_delta_zeta(t)
+
+            pi_E = T.sqrt(self.pi_EE**2 + self.pi_EN**2)
+
+            cospsi = self.pi_EN/pi_E
+            sinpsi = self.pi_EE/pi_E
+
+            u_n = -self.u_0*sinpsi + (t - self.t_0)/\
+                self.t_E*cospsi + pi_E*delta_zeta_n
+            u_e = self.u_0*cospsi + (t - self.t_0)/\
+                self.t_E*sinpsi + pi_E*delta_zeta_e
+
+            return u_n, u_e
 
         else:
             delta_zeta_n, delta_zeta_e = self.__compute_delta_zeta(t)
@@ -194,50 +213,3 @@ class Trajectory:
                 self.pi_EN*delta_zeta_n
 
             return T.sqrt(u_par**2 + u_per**2)
-
-    def evaluate_posterior_trajectory_on_grid(self, trace, t_grid, 
-            n_samples=50):
-        """
-        Evaluates different trajectories of the lens w.r. top the source on 
-        the plane of the sky in (u_n, u_e) coordinates.
-        
-        Parameters
-        ----------
-        trace : PyMC3 MultiTrace object
-            Trace object containing samples from posterior.
-        t_grid : 1D numpy array
-            Time grid for which the model is to be evaluated.         
-        n_samples : int, optional
-            Number of parameter samples for which the model is to be evaluated,
-            these are randomly picked from the trace object, by default 50.
-
-        Returns
-        -------
-        ndarray
-            Numpy array of shape (n_sample, 2, len(t_grid)). The first 
-            component is u_n, the second u_e.
-        """
-        prediction_eval = np.zeros((n_samples, 2, len(t_grid)))
-
-        # Construct tensors needed to evaluate the model
-        t_grid_tensor, _ = construct_masked_tensor([t_grid])
-
-        # Evaluate model for each sample
-        for i, sample in enumerate(xo.get_samples_from_trace(trace, 
-                size=n_samples)):
-            
-            # Tensor which is to be evaluated in model context
-            t = t_grid_tensor
-            delta_zeta_n, delta_zeta_e = self.compute_delta_zeta(t_grid_tensor)
-
-            cospsi = self.pi_EN/self.pi_E
-            sinpsi = self.pi_EE/self.pi_E
-            u_n = -self.u_0*sinpsi + (t - self.t_0)/\
-                self.t_E*cospsi + self.pi_E*delta_zeta_n
-            u_e = self.u_0*cospsi + (t - self.t_0)/\
-                self.t_E*sinpsi + self.pi_E*delta_zeta_e
-
-            prediction_eval[i, 0, :] = xo.eval_in_model(u_e, sample)
-            prediction_eval[i, 1, :] = xo.eval_in_model(u_n, sample)
-
-        return prediction_eval
