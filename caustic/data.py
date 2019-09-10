@@ -9,7 +9,7 @@ from astropy.coordinates import SkyCoord
 from astropy import units as u 
 from astropy.table import Table
 
-class Data(object):
+class Data:
     """
     Base class for microlensing data from various observatories. 
     Subclasses should overload the :func:`Data.__load_data`. The time series
