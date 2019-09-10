@@ -131,8 +131,11 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
     pm_model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
         trace.
-    trace : PyMC3 MultiTrace object
-        Trace object containing samples from posterior.
+    trace : PyMC3 MultiTrace object or ndarray
+        Trace object containing samples from posterior. Assumed to be either
+        a PyMC3 MultiTrace object, or a numpy array of shape 
+        (n_samples, n_vars) containing raw samples in the transformed parameter
+        space (without deterministic variables).
     t_grid : theano.tensor
         Times at which we want to evaluate model predictions. Shape 
         (n_bands, n_pts).
@@ -145,6 +148,14 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
         are provided the likelihood which is computed is the GP marginal
         likelihood.
     """
+    # Check if trace is a PyMC3 object or a raw numpy array, extract samples
+    if isinstance(trace, np.ndarray):
+        trace = trace[np.random.randint(len(trace), size=n_samples)]
+        # Map parameters to a dictionary which can be evaluated in model context
+        samples = [pm_model.bijection.rmap(params[::-1]) for params in trace]
+    else: 
+        samples = xo.get_samples_from_trace(trace, size=n_samples)
+
     # Load standardized data
     tables = data.get_standardized_data()
 
@@ -157,16 +168,14 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
     # Evaluate predictions in model context
     if gp_list==None:
         with pm_model:
-            for i, sample in enumerate(xo.get_samples_from_trace(trace, 
-                    size=n_samples)):
+            for i, sample in enumerate(samples):
                 prediction_eval[i] = xo.eval_in_model(prediction, sample)
 
     else:
         with pm_model:
             prediction_tensors =\
                 [gp_list[n].predict(t_grid[n]) for n in range(n_bands)]
-            for i, sample in enumerate(xo.get_samples_from_trace(trace, 
-                    size=n_samples)):
+            for i, sample in enumerate(samples):
                 for n in range(n_bands):
                     prediction_eval[i, n] =\
                         xo.eval_in_model(prediction_tensors[n], sample) 
@@ -299,8 +308,11 @@ def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e,
     pm_model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
         trace.
-    trace : PyMC3 MultiTrace object
-        Trace object containing samples from posterior.
+    trace : PyMC3 MultiTrace object or ndarray
+        Trace object containing samples from posterior. Assumed to be either
+        a PyMC3 MultiTrace object, or a numpy array of shape 
+        (n_samples, n_vars) containing raw samples in the transformed parameter
+        space (without deterministic variables).
     t_grid : theano.tensor
         Times at which we want to evaluate model predictions. Shape 
         (n_bands, n_pts).
@@ -313,6 +325,14 @@ def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e,
     n_samples: int
         Number of posterior draws to be plotted.
     """
+    # Check if trace is a PyMC3 object or a raw numpy array, extract samples
+    if isinstance(trace, np.ndarray):
+        trace = trace[np.random.randint(len(trace), size=n_samples)]
+        # Map parameters to a dictionary which can be evaluated in model context
+        samples = [pm_model.bijection.rmap(params[::-1]) for params in trace]
+    else: 
+        samples = xo.get_samples_from_trace(trace, size=n_samples)
+
     # Evaluate model for each sample on a fine grid
     n_pts_dense = T.shape(t_grid)[1].eval()
 
@@ -321,8 +341,7 @@ def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e,
 
     # Evaluate predictions in model context
     with pm_model:
-        for i, sample in enumerate(xo.get_samples_from_trace(trace, 
-                size=n_samples)):
+        for i, sample in enumerate(samples):
             prediction_eval_u_n[i] = xo.eval_in_model(u_n, sample)
             prediction_eval_u_e[i] = xo.eval_in_model(u_e, sample)
 
@@ -530,10 +549,13 @@ def sample_with_dynesty(pm_model, prior_transform, sampler_kwargs={},
 
     Returns
     -------
-    dynesty.results.Result
-        Object containing results of the Nested Sampling run. 
+    tuple 
+        Returns a tuple of type (dynesty.results.Result, ndarray) with the 
+        object containing results of the Nested Sampling run and a numpy array
+        with reweighted posterior samples.
     """
     import dynesty 
+    from dynesty import utils as dyfunc
 
     with pm_model:              
         print("Model vars", pm_model.vars)
@@ -555,7 +577,13 @@ def sample_with_dynesty(pm_model, prior_transform, sampler_kwargs={},
         sampler.run_nested(wt_kwargs={'pfrac': 1.0}, print_progress=True, 
             **run_sampler_kwargs)
 
-    return sampler.results
+    results = sampler.results 
+
+    # Resample samples such that they have equal weight
+    samples, weights = results.samples, np.exp(results.logwt - results.logz[-1])
+    new_samples = dyfunc.resample_equal(samples, weights)
+
+    return sampler.results, new_samples
 
 def remove_outliers(pm_model, event):
     """
