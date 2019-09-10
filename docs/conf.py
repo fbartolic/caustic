@@ -54,3 +54,5 @@ html_static_path = ['_static']
 
 
 # -- Extension configuration -------------------------------------------------
+# fix contents.rst not found error
+master_doc = 'index'
