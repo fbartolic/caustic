@@ -12,8 +12,14 @@ from astropy.table import Table
 class Data:
     """
     Base class for microlensing data from various observatories. 
+
     Subclasses should overload the :func:`Data.__load_data`. The time series
     data is stored as a list of Astropy tables, one for each photometric filter.
+
+    Parameters
+    ----------
+    event_dir : str
+        Path to the directory containing microlensing data.
     """
     def __init__(
         self, 
