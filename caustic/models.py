@@ -75,7 +75,7 @@ class SingleLensModel(pm.Model):
             Trajectory of the lens u(t) with respect to the source in units of
             ang. Einstein radii.
         u0 : theano.tensor
-            Lens-source separation at time t_.
+            Lens-source separation at time t_0.
 
         Returns
         -------
