@@ -13,7 +13,7 @@
 # import os
 # import sys
 # sys.path.insert(0, os.path.abspath('.'))
-
+import sphinx_rtd_theme
 
 # -- Project information -----------------------------------------------------
 
@@ -29,7 +29,10 @@ author = 'Fran Bartolic'
 # ones.
 extensions = [
     'sphinx.ext.autodoc',
+    "sphinx_rtd_theme",
 ]
+
+html_theme = "sphinx_rtd_theme"
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
