@@ -1,19 +1,16 @@
 import numpy as np
 from matplotlib import pyplot as plt
 import matplotlib as mpl
+import os
+
 import exoplanet as xo
 import pymc3 as pm
 import theano
 import theano.tensor as T
-import caustic as ca
-import os
 
-mpl.rc('font',**{'family':'serif','serif':['Palatino']})
-mpl.rc('text', usetex=False)
-mpl.rcParams['axes.labelsize'] = 22
-mpl.rcParams['xtick.labelsize'] = 22
-mpl.rcParams['ytick.labelsize'] = 22
-mpl.rcParams['axes.titlesize'] = 18
+
+import caustic as ca
+
 
 def construct_masked_tensor(array_list):
     """
@@ -62,6 +59,7 @@ def construct_masked_tensor(array_list):
 
     return tensor, mask
 
+
 def estimate_t0(event):
     """
     Estimates the initial value for the t0 parameter. This is necessary because
@@ -81,6 +79,7 @@ def estimate_t0(event):
         cut -= 0.5
 
     return guess
+
 
 def revert_flux_params_to_nonstandardized_format(data, Delta_F, F_base, u_0):
     # Revert F_base and Delta_F to non-standardized units
@@ -111,6 +110,7 @@ def revert_flux_params_to_nonstandardized_format(data, Delta_F, F_base, u_0):
     m_source = zero_point - 2.5*T.log10(F_S)
 
     return m_source, g
+
     
 def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction, 
         n_samples=50, gp_list=None, **kwargs):
@@ -214,6 +214,7 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
             fmt='o', color='C' + str(n), alpha=0.5, **kwargs)
         ax[1].grid(True)
 
+
 def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid, 
         prediction, gp_list, **kwargs):
     """
@@ -292,6 +293,7 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
             fmt='o', color='C' + str(n), alpha=0.5, **kwargs)
         ax[1].grid(True)
 
+
 def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e, 
         n_samples=50, color='C0', **kwargs):
     """
@@ -363,49 +365,6 @@ def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e,
         ax.plot(prediction_eval_u_e[i], prediction_eval_u_n[i], alpha=0.2, 
             color=color, **kwargs)
 
-def plot_histograms_of_prior_samples(event, pm_model, output_dir):
-    """
-    Plots histograms of draws from prior distribution for each model parameter.
-    The plots are saved to disk.
-    
-    Parameters
-    ----------
-    data : caustic.data
-        Microlensing event data. Although this functions plots draws from the
-        prior, some of the priors depend on the data in a simple way so a
-        data object is still needed.
-    pm_model : pymc3.Model
-        PyMC3 model object. Needs to work with `sample_prior_predictive` method
-        from PyMC3.
-    output_dir : str 
-        Path to output directory where the images are going to be saved.
-    """
-    # Sample from the prior
-    n_samples = 5000
-    with pm_model:
-        trace = pm.sample_prior_predictive(n_samples)
-
-    directory = output_dir + '/prior_samples/'
-    # Create output directory
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-
-    for key in trace.keys():
-        value = trace[key]
-        # Some parameters are multivariate and in those cases the keys have 
-        # different dimensions
-        if value.ndim > 1:
-            for i in range(len(value[0])):
-                fig, ax = plt.subplots() 
-                label = key + str(i)
-                ax.hist(value[:, i], bins=30);
-                ax.set_xlabel(label)
-                plt.savefig(directory + label + '.png')
-        else:
-            fig, ax = plt.subplots() 
-            label = key
-            ax.hist(value, bins=30);
-            plt.savefig(directory + label + '.png')
 
 def compute_invgamma_params(data):
     """
@@ -453,74 +412,6 @@ def compute_invgamma_params(data):
     return (T.as_tensor_variable(invgamma_a.reshape((n_bands, 1))),
         T.as_tensor_variable(invgamma_b.reshape((n_bands, 1))))
 
-def sample_with_emcee(pm_model, n_walkers=50, n_samples=10000, start=None):
-    """
-    Samples the model posterior distribution using emcee.
-            
-    Parameters
-    ----------
-    output_dir : str
-        Path to directory where the trace is to be saved, together with
-        various diagnostic plots and information. If it is not defined 
-        nothing will be saved.
-    n_walkers: int, optional
-        Number of walkers, by default 50.
-    n_samples : int, optional
-        Number of sampling steps, by default 10000.
-    start: dict, optional
-        Initial point in the parameter space at which the tuning steps
-        start.
-
-    Returns
-    -------
-    sampler object 
-        emcee sampler object 
-    """
-    import emcee 
-
-    # Print the names of the free parameters and the inital values
-    # of their log-priors        
-    free_parameters = [RV.name for RV in pm_model.basic_RVs]
-    initial_logps = [RV.logp(pm_model.test_point) for RV in pm_model.basic_RVs]
-    if np.any(np.isnan(initial_logps))==True:
-        print("Prior distributions misspecified, check that the test\
-            values are within the bounds of the prior.")
-
-    print("Free parameters:\n", free_parameters)
-
-    # DFM's hack for using emcee with PyMC3 models
-    f = theano.function(pm_model.vars,[pm_model.logpt] + pm_model.deterministics)
-
-    def log_prob_func(params):
-        dct = pm_model.bijection.rmap(params[::-1])
-        args = (dct[k.name] for k in pm_model.vars)
-        results = f(*args)
-        return tuple(results)
-
-    # First we work out the shapes of all of the deterministic variables
-    initial_params = pm.find_MAP()
-
-    # If custom initial parameters are specified, update relevant parameters
-    if start is not None:
-        for key in initial_params.keys():
-            if key in start.keys():
-                initial_params[key] = np.array([start[key]])
-
-    # For some reason, bijection.map flips the ordering of the variables
-    # from that in self.vars, hence [::-1]
-    vec = pm_model.bijection.map(initial_params)[::-1]
-    initial_blobs = log_prob_func(vec)[1:]
-    dtype = [(var.name, float, np.shape(b)) for var,
-            b in zip(pm_model.deterministics, initial_blobs)]
-    
-    # Then sample as usual
-    coords = vec + 1e-5 * np.random.randn(n_walkers, len(vec))
-    nwalkers, ndim = coords.shape
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob_func, 
-        blobs_dtype=dtype)
-    sampler.run_mcmc(coords, n_samples, progress=True)
-
-    return sampler
 
 def sample_with_dynesty(pm_model, prior_transform, sampler_kwargs={}, 
         run_sampler_kwargs={}):
@@ -584,45 +475,3 @@ def sample_with_dynesty(pm_model, prior_transform, sampler_kwargs={},
     new_samples = dyfunc.resample_equal(samples, weights)
 
     return sampler.results, new_samples
-
-def remove_outliers(pm_model, event):
-    """
-    Optimizes a flexible PSPL model including a Gaussian Process in order to 
-    flag any outliers.
-    
-    Parameters
-    ----------
-    model : pymc3.Model 
-        PyMC3 Model object.
-    event : caustic.data 
-        Microlensing event data. 
-    """
-    # Remove worst outliers using rolling MAD before doing optimization
-    event.remove_worst_outliers()
-
-    # Optimize a flexible GP model model
-    with pm_model:
-        start = pm_model.test_point
-        map_soln = xo.optimize(start=start, vars=[pm_model.F_base])
-        map_soln = xo.optimize(start=map_soln, vars=[pm_model.Delta_F])
-        map_soln = xo.optimize(start=map_soln, vars=[pm_model.u0])
-        map_soln = xo.optimize(start=map_soln, vars=[pm_model.t0])
-        map_soln = xo.optimize(start=map_soln, vars=[pm_model.u0, pm_model.teff])
-        map_soln = xo.optimize(start=map_soln)
-
-        t_observed = [T.as_tensor_variable(table['HJD']) for table in event.tables]
-        pred_at_observed_times = pm_model.evaluate_map_model_on_grid(
-            t_observed, map_soln)
-
-    # Reomove all points deviating from MAP model by x*sigma_MAD
-    for n in range(pm_model.n_bands):
-        resid = event.tables[n]['flux'] - pred_at_observed_times[n]
-        mad = lambda x: 1.4826*np.median(np.abs(x - np.median(x)))
-        mask = np.abs(resid/mad(resid)) < 7
-
-        # Updata mask
-        event.light_curves[n]['mask'] = mask
-
-    # Plot data 
-    fig, ax = plt.subplots(figsize=(25, 10))
-    event.plot(ax)
