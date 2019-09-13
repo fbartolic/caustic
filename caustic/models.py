@@ -4,14 +4,18 @@ import theano
 import theano.tensor as T
 from matplotlib import pyplot as plt
 
+
 from .utils import construct_masked_tensor, estimate_t0
+
 
 import exoplanet as xo
 from exoplanet.gp import terms, GP
 
+
 from scipy.special import zeta
 from scipy.stats import invgamma
 from scipy.optimize import fsolve
+
 
 class SingleLensModel(pm.Model):
     """
@@ -30,16 +34,12 @@ class SingleLensModel(pm.Model):
         Defines how the error bars are treated in models. Choose between 
         'none', 'constant', 'additive_variance', and  'flux_dependant', 
         by default 'constant'.
-    kernel : str, optional
-        Choose a GP kernel, options are 'white_noise' and 'matern32', by 
-        default 'white_noise'.
     """
     #  override __init__ function from pymc3 Model class
     def __init__(
         self, 
         data=None, 
-        errorbar_rescaling='constant', 
-        kernel='white_noise'
+        errorbar_rescaling='constant'
     ):
         super(SingleLensModel, self).__init__()
 
