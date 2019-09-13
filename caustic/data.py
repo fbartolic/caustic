@@ -5,9 +5,11 @@ from io import StringIO
 import re
 import os
 
+
 from astropy.coordinates import SkyCoord
 from astropy import units as u 
 from astropy.table import Table
+
 
 class Data:
     """
@@ -343,6 +345,7 @@ class Data:
         else:
             raise ValueError("The only to options for units are 'magnitudes'"
                 "or 'fluxes'.")
+
     
 class OGLEData(Data):
     """Subclass of data class for dealing with OGLE data."""
@@ -381,6 +384,7 @@ class OGLEData(Data):
 
         t.meta = {'filter':'I', 'observatory':'OGLE'}
         self._Data__tables.append(t)
+
 
 class MOAData(Data):
     """Subclass of data class for handling with MOA datasets."""
@@ -438,6 +442,7 @@ class MOAData(Data):
 
         self._Data__tables.append(t)
 
+
 class KMTData(Data):
     """Subclass of data class for dealing with OGLE data."""
     def __init__(
@@ -481,6 +486,7 @@ class KMTData(Data):
             mask = Table.Column(np.ones(len(t['HJD']), dtype=bool), name='mask', 
                 dtype=bool)
             t.add_column(mask)  # Insert before the first table column
+
 
 class NASAExoArchiveData(Data):
     """Subclass of data class for dealing with data from NASA Exo Archive."""
