@@ -20,26 +20,17 @@ from scipy.optimize import fsolve
 class SingleLensModel(pm.Model):
     """
     Abstract class for a single lens model.  Subclasses should implement the
-    should implement the `magnification` method, and if needed, the
-    `evaluate_posterior_model_on_grid`, `evaluate_prior_model_on_grid`, and
-    `evaluate_map_model_on_grid` methods. All of the noise models are 
-    implemented in this class. Subclasses implement forward models which 
-    compute the magnification.
+    should implement the :func:`compute_magnification` method. 
 
     Parameters
     ----------
-    data : caustic.data 
+    data : :func:`~caustic.data.Data`
         Caustic data object.
-    errorbar_rescaling : str, optional
-        Defines how the error bars are treated in models. Choose between 
-        'none', 'constant', 'additive_variance', and  'flux_dependant', 
-        by default 'constant'.
     """
     #  override __init__ function from pymc3 Model class
     def __init__(
         self, 
         data=None, 
-        errorbar_rescaling='constant'
     ):
         super(SingleLensModel, self).__init__()
 
@@ -61,20 +52,18 @@ class SingleLensModel(pm.Model):
         self.F, _ = construct_masked_tensor(F_list)
         self.sig_F, _ = construct_masked_tensor(sig_F_list)
 
-        self.errorbar_rescaling = errorbar_rescaling
-
     def compute_magnification(self, u, u0):
         """
-        Computes the magnification fraction [A(u) - 1]/[A(u0) - 1]
-        where A(u) is the magnification function.
+        Computes the magnification fraction :math:`[A(u) - 1]/[A(u_0) - 1]`
+        where :math:`A(u)` is the magnification function.
         
         Parameters
         ----------
         u : theano.tensor
-            Trajectory of the lens u(t) with respect to the source in units of
-            ang. Einstein radii.
+            Trajectory of the lens :math:`u(t)` with respect to the source 
+            in units of ang. Einstein radii.
         u0 : theano.tensor
-            Lens-source separation at time t_0.
+            Lens-source separation at time :math:`t_0`.
 
         Returns
         -------
@@ -86,56 +75,11 @@ class SingleLensModel(pm.Model):
 
         return (A_u - 1)/(A_u0 - 1)
 
-    def __init_matern32_noise_model(self):
-        """
-        Initializes all parameters for the matern32 Gaussian Process
-        noise model.
-
-        """
-        def solve_for_invgamma_params(params, x_min, x_max):
-            """
-            Returns parameters of an inverse zeta distribution p(x) such that 
-            0.1% of total prob. mass is assigned to values of x < x_min and 
-            1% of total prob. masss  to values greater than x_max.
-            """
-            lower_mass = 0.01
-            upper_mass = 0.99
-
-            # Trial parameters
-            alpha, beta = params
-
-            # Equation for the roots defining params which satisfy the constraint
-            return (invgamma.cdf(x_min, alpha, scale=beta) - \
-                lower_mass, invgamma.cdf(x_max, alpha, scale=beta) - upper_mass)
-
-        # Compute parameters for the prior on GP hyperparameters
-        invgamma_a = np.zeros(self.n_bands)
-        invgamma_b = np.zeros(self.n_bands)
-
-        for i in range(self.n_bands):
-            t_ = self.t[i].eval()
-            invgamma_a[i], invgamma_b[i] = fsolve(solve_for_invgamma_params, 
-                (0.1, 0.1), (np.median(np.diff(t_)), t_[-1] - t_[0]))
-
-        BoundedNormal = pm.Bound(pm.Normal, lower=0.0) 
-
-        self.sigma = BoundedNormal('sigma', 
-            mu=T.zeros((self.n_bands, 1)),
-            sd=3.*T.ones((self.n_bands, 1)),
-            testval=0.5*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-
-        self.rho = pm.InverseGamma('rho', 
-            alpha = T.as_tensor_variable(invgamma_a)*T.ones((self.n_bands, 1)),
-            beta = T.as_tensor_variable(invgamma_b)*T.ones((self.n_bands, 1)),
-            testval=2.*T.ones((self.n_bands, 1)),
-            shape=(self.n_bands, 1))
-        
     def compute_log_likelihood(self, r, var_F, gp_list=None, **kwargs):
         """"
         Computes the total log likelihood of the model assuming that the 
-        observations in different bands are independent. 
-        The likelihood is assumed to be multivariate Gaussian with an optional
+        observations in different bands are independent. The likelihood is 
+        assumed to be multivariate Gaussian with an optional
         Gaussian Process modeling the covariance matrix elements.
 
         Parameters
@@ -145,7 +89,7 @@ class SingleLensModel(pm.Model):
         var_F : theano.tensor
             Diagonal elements of the covariance matrix. 
         gp_list : list
-            List of `exoplanet.gp.GP` objects, one per each band. If these
+            List of ``exoplanet.gp.GP`` objects, one per each band. If these
             are provided the likelihood which is computed is the GP marginal
             likelihood.
 
@@ -175,15 +119,16 @@ class SingleLensModel(pm.Model):
         Parameters
         ----------
         magnification : theano.tensor
-            Computed magnification, shape (n_bands, max_npoints).
+            Computed magnification, shape ``(n_bands, max_npoints)``.
         var_F : theano.tensor
-            Diagonal elements of the covariance matrix, shape (n_bands, 
-            max_npoints).
+            Diagonal elements of the covariance matrix, shape ``(n_bands, 
+            max_npoints)``.
         L : theano.tensor
             Covariance matrix for the multivariate gaussian prior on the linear
             flux parameters. The Gaussian prior is a requirement to make
             the analytical marginalization tractable. The prior is assumed to
-            be equal for all bands, hence the matrix needs to be (2, 2).
+            be equal for all bands, hence the matrix needs to be of shape 
+            ``(2, 2)``.
         """
         def log_likelihood_single_band(F, var_F, mag, mask):
             F = F[mask.nonzero()]
@@ -230,7 +175,7 @@ class SingleLensModel(pm.Model):
 
     def generate_mock_dataset(self):
         """
-        Generates mock caustic.data object by sampling the prior predictive 
-        distribution.
+        Generates mock :func:`~caustic.data.Data` object by sampling the prior
+        predictive distribution.
         """
         raise NotImplementedError()

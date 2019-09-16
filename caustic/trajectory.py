@@ -12,9 +12,17 @@ from astropy import units as u
 
 class Trajectory:
     """
-    Computes the separation between the lens and the source star as a 
-    function of time assuming that either no parllax effects or annual parallax
-    parametrized with pi_EE and pi_EN parameters.
+    Computes the magnitude of the separation vector :math:`\mathbf{u}(t)` 
+    between the lens and the source star as a function of time assuming that 
+    either no parallax effects or annual parallax parametrized with 
+    :math:`\pi_\mathrm{EE}` and :math:`\pi_\mathrm{EN}` parameters.
+
+    Example usage:
+
+    .. code-block:: python
+
+        u = caustic.trajectory.Trajectory(event, t_0, u_0, t_E, pi_EE, pi_EN)
+ 
     """
     def __init__(
         self,
@@ -88,15 +96,15 @@ class Trajectory:
         """
         This function takes a 3D cartesian vector specified
         in the ICRS coordinate system and evaluated at differrent
-        times (t_i,...t_N) and projects it onto a spherical coordinate
+        times :math:`(t_i,\dots, t_N)` and projects it onto a spherical coordinate
         system on the plane of the sky with the origin at the position
         defined by the coordinates.
         
         Parameters
         ----------
         matrix : ndarray
-            Matrix of shape (len(times), 3)
-        coordinates : astropy.coordinates.SkyCoord
+            Matrix of shape ``(len(times), 3)``
+        coordinates : ``astropy.coordinates.SkyCoord``
             Coordinates on the sky.
         """
         # Unit vector normal to the plane of the sky in ICRS coordiantes
@@ -119,14 +127,14 @@ class Trajectory:
 
     def __compute_delta_zeta(self, t):
         """
-        Computes the components of delta_zeta vector - the devaition of the 
-        projected separation of the Sun relative to time t_0.
+        Computes the components of delta_zeta vector - the deviation of the 
+        projected separation of the Sun relative to time :math:`t_0`.
 
         Parameters
         ----------
         t : theano.tensor
-            Tensor containing times for which u(t) is to be computed. Needs 
-            to have shape (n_bands, npoints)
+            Tensor containing times for which :math:`\mathbf{u}(t)` is to 
+            be computed. Needs to have shape ``(n_bands, npoints)``.
        
         Returns
         -------
@@ -169,22 +177,24 @@ class Trajectory:
     def compute_trajectory(self, t, return_components=False):
         """
         Computes the magnitude of the relative lens-source separation vector
-        u(t).         
+        :math:`\mathbf{u}(t)`.         
 
         Parameters
         ----------
         t : theano.tensor
-            Tensor containing times for which u(t) is to be computed. Needs 
-            to have shape (n_bands, npoints)
+            Tensor containing times for which :math:`\mathbf{u}(t)` is to 
+            be computed. Needs to have shape ``(n_bands, npoints)``
         return_components : bool, optional
-            If true, the function returns the vector components (u_n, u_e)
-            of u(t) rather than its magnitude, by default False.
+            If true, the function returns the vector components 
+            :math:`(u_n, u_e)` of :math:`\mathbf{u}(t)` rather than its 
+            magnitude, by default False.
 
         Returns
         -------
         theano.tensor
-            The magnitude of the separation vector u(t) for each time or a 
-            tuple with the two components of u(t) in (north, east) basis.
+            The magnitude of the separation vector :math:`\mathbf{u}(t)` 
+            for each time or a tuple with the two components of 
+            :math:`\mathbf{u}(t)` in (north, east) basis.
         """
         if (self.pi_EE or self.pi_EN) is None:
             u = T.sqrt(self.u_0**2 + ((t - self.t_0)/self.t_E)**2)

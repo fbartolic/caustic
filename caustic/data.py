@@ -17,7 +17,19 @@ class Data:
 
     Subclasses should overload the :func:`Data.__load_data` method. The time 
     series data is stored as a list of Astropy tables, one for each photometric
-    filter.
+    filter. Available subclasses for specific data sources are ``OGLEData``,
+    ``MOAData``, ``KMTData``, ``NASAExoArchiveData``.
+
+    Example usage:
+
+    .. code-block:: python
+
+        event = caustic.data.OGLEData("path_to_dir")
+        coords = event.coordinates  # Get coordinates of the event
+        name = event.event_name   # Get event name(s)
+        event.units = "fluxes"  # Change units from magitudes to fluxes
+        event.units = "magnitudes"  # Change units from fluxes to magnitudes
+
 
     Parameters
     ----------
@@ -73,7 +85,7 @@ class Data:
 
     def __convert_data_to_fluxes(self):
         """
-        If the light curves stored in `tables` attribute are expressed in 
+        If the light curves stored in the ``__tables`` attribute are expressed in 
         magnitudes, calling this function will convert them to fluxes.
         """
         if self.__units=='fluxes':
@@ -93,7 +105,7 @@ class Data:
 
     def __convert_data_to_magnitudes(self):
         """
-        If the light curves stored in `tables` attribute are expressed in 
+        If the light curves stored in the ``__tables`` attribute are expressed in 
         fluxes, calling this function will convert them to magnitudes.
         """
         if self.__units=='magnitudes':
@@ -131,8 +143,8 @@ class Data:
         Returns
         -------
         tuple
-            Tuple of ndarrays (mu_F, sig_F) where mu_F is the mean of the 
-            log-normal distributed flux, and sig_F is the corresponding 
+            Tuple of ndarrays ``(mu_F, sig_F)`` where ``mu_F`` is the mean of the 
+            log-normal distributed flux, and ``sig_F`` is the corresponding 
             square root variance.
         """
         # Truncate errorbars greater than 1 mag for numerical stability reasons
@@ -172,8 +184,8 @@ class Data:
         Returns
         -------
         tuple
-            Tuple of ndarrays (mu_F, sig_F) where mu_F is the mean of the 
-            log-normal distributed flux, and sig_F is the corresponding 
+            Tuple of ndarrays ``(mu_F, sig_F)`` where mu_F is the mean of the 
+            log-normal distributed flux, and ``sig_F`` is the corresponding 
             square root variance.
         """
         e = np.exp(1)
@@ -185,9 +197,10 @@ class Data:
 
     def get_standardized_data(self):  
         """
-        This returns data tables in a standardized format, expressed in 
-        flux units, rescaled to zero  median and unit variance, a format which 
-        is more suitable for subsequent modeling.
+        This function returns data tables in a standardized format, expressed in 
+        flux units rescaled to zero  median and unit variance, a format which 
+        is more suitable for subsequent modeling. The conversion from fluxes
+        to magnitudes defines a flux of 1 to correspond to magnitude 22.
         """
         if not (self.units=='fluxes'):
             self.units = 'fluxes'
@@ -217,7 +230,6 @@ class Data:
         Parameters
         ----------
         ax : Matplotlib axes object
-
         """
         if (self.__units=='fluxes'):
             unit = 'flux'

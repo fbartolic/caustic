@@ -15,11 +15,10 @@ import caustic as ca
 def construct_masked_tensor(array_list):
     """
     Given a list of 1D numpy arrays, this function returns a theano tensor
-    of shape (n_elements, n_max) where n_elements is the number of arrays
-    in the list, and n_max is the length of the largest array in the list.
-    The missing values are filled in with zeros and a mask is returned 
-    together with tensor. The purpose of this function is to construct 
-    tensors instead of using lists in order to avoid having to do loops.
+    of shape ``(n_elements, n_max)`` where ``n_elements`` is the number of 
+    arrays in the list, and ``n_max`` is the length of the largest array 
+    in the list. The missing values are filled in with zeros and a mask is returned 
+    together with the tensor. 
 
     Parameters
     ----------
@@ -29,11 +28,11 @@ def construct_masked_tensor(array_list):
     Returns
     -------
     tuple 
-        Returns tuple (tensor, mask) where tensor and maks are 
-        theano.tensor objects of the same shape (n_elements, n_max). 
-        The mask tensor is of datta type int8 and the elements are 
+        Returns tuple ``(tensor, mask)`` where tensor and maks are 
+        ``theano.tensor`` objects of the same shape ``(n_elements, n_max)``. 
+        The mask tensor is of datta type ``int8`` and the elements are 
         equal to 1 for non-filled in values and zero otherwise. To use
-        the mask in theano, use `tensor[mask.nonzero()]`.
+        the mask in theano, use ``tensor[mask.nonzero()]``.
 
     """
     for array in array_list:
@@ -62,9 +61,10 @@ def construct_masked_tensor(array_list):
 
 def estimate_t0(event):
     """
-    Estimates the initial value for the t0 parameter. This is necessary because
-    the posterior is highly multi-modal in t0 and the sampler usually
-    fails to converge if t0 is not close to true value.
+    Estimates the initial value for the :math:`t_0` parameter. This is 
+    necessary because the posterior is highly multi-modal in :math:`t_0` 
+    and the sampler usually fails to converge if :math:`t_0` is not close 
+    to true value.
     """
     event.remove_worst_outliers(window_size=20, mad_cutoff=2)
     tables = event.get_standardized_data()
@@ -89,7 +89,7 @@ def revert_flux_params_to_nonstandardized_format(data, Delta_F, F_base, u_0):
     
     Parameters
     ----------
-    data : caustic.data
+    data : :func:`~caustic.data.Data`
         Microlensing event data. 
     Delta_F : theano.tensor
         Tensor of shape ``(n_bands)``.
@@ -101,7 +101,7 @@ def revert_flux_params_to_nonstandardized_format(data, Delta_F, F_base, u_0):
     Returns
     -------
     tuple
-        m_source, g.
+        ``(m_source, g)``.
     """
     # Revert F_base and Delta_F to non-standardized units
     data.units = 'fluxes'
@@ -146,8 +146,8 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
     Parameters
     ----------
     ax : matplotlib.axes 
-        Needs to be of shape (2, 1).
-    data : caustic.data 
+        Needs to be of shape ``(2, 1)``.
+    data : :func:`~caustic.data.Data`
         Microlensing event data. 
     pm_model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
@@ -250,7 +250,7 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
     ----------
     ax : matplotlib.axes 
         Needs to be of shape ``(2, 1)``.
-    data : caustic.data 
+    data : :func:`~caustic.data.Data`
         Microlensing event data. 
     pm_model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
@@ -325,8 +325,8 @@ def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e,
     Parameters
     ----------
     ax : matplotlib.axes 
-        Needs to be of shape (2, 1).
-    data : caustic.data 
+        Needs to be of shape ``(2, 1)``.
+    data : :func:`~caustic.data.Data`
         Microlensing event data. 
     pm_model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
@@ -334,15 +334,15 @@ def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e,
     trace : PyMC3 MultiTrace object or ndarray
         Trace object containing samples from posterior. Assumed to be either
         a PyMC3 MultiTrace object, or a numpy array of shape 
-        (n_samples, n_vars) containing raw samples in the transformed parameter
+        ``(n_samples, n_vars)`` containing raw samples in the transformed parameter
         space (without deterministic variables).
     t_grid : theano.tensor
         Times at which we want to evaluate model predictions. Shape 
-        (n_bands, n_pts).
+        ``(n_bands, n_pts)``.
     u_n : theano.tensor
-        North component of the trajectory vector u(t).
+        North component of the trajectory vector :math:`\boldsymbol{u}(t)`.
     u_e : theano.tensor
-        East component of the trajectory vector u(t).
+        East component of the trajectory vector :math:`\boldsymbol{u}(t)`.
     color : string
         Color of the plotted samples.
     n_samples: int
@@ -389,22 +389,23 @@ def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e,
 
 def compute_invgamma_params(data):
     """
-    Returns parameters of an inverse zeta distribution p(x) such that 
-    0.1% of total prob. mass is assigned to values of t < t_min and 
-    1% of total prob. masss  to values greater than t_tmax. t_min is defined
-    to be the median spacing between consecutive data points in the time series 
-    and t_max is the total duration of the time series.
+    Returns parameters of an inverse zeta distribution :math:`p(x)` such that 
+    0.1% of total prob. mass is assigned to values of :math:`t < t_{min}` and 
+    1% of total prob. masss  to values greater than :math:`t_{tmax}`. 
+    :math:`t_{min}` is defined to be the median spacing between consecutive 
+    data points in the time series and :math:`t_{max}` is the total duration 
+    of the time series.
     
     Parameters
     ----------
-    data : caustic.data 
+    data : :func:`~caustic.data.Data`
         Microlensing event data. 
    
     Returns
     -------
     tuple
-        (inv_gamma_a, inv_gamma_b) where each of the parameters has shape 
-        (n_bands, 1).
+        ``(inv_gamma_a, inv_gamma_b)`` where each of the parameters has shape 
+        ``(n_bands, 1)``.
     """
     from scipy.stats import invgamma
     from scipy.optimize import fsolve
@@ -437,13 +438,13 @@ def compute_invgamma_params(data):
 def sample_with_dynesty(pm_model, prior_transform, sampler_kwargs={}, 
         run_sampler_kwargs={}):
     """
-    Samples the posterior distribution of a PyMC3 model using dynamic nested
-    sampling as implemented in dynesty. 
+    Samples the posterior distribution of a ``PyMC3`` model using dynamic nested
+    sampling as implemented in ``dynesty``. 
 
     Parameters
     ----------
     pm_model: pymc3.Model
-        PyMC3 model object defining the model we want to sample using dynesty.
+        PyMC3 model object defining the model we want to sample using ``dynesty``.
     prior_transform : function
         Dyensty samples in a prior space where all parameters are i.i.d within
         a a D-dimensional unit cube. For independent parameters, this would be 
@@ -451,7 +452,7 @@ def sample_with_dynesty(pm_model, prior_transform, sampler_kwargs={},
         associated with each parameter. The function should
         take an array of these uniformly distributed prior parameters and 
         transform them according to the actual prior we'd like to use. See
-        the `dynesty` documentation for more details.
+        the ``dynesty`` documentation for more details.
     sampler_kwargs: dict
         Additional arguments passed to the :code:`dynesty.DynamicNestedSampler` 
         method.
@@ -462,7 +463,7 @@ def sample_with_dynesty(pm_model, prior_transform, sampler_kwargs={},
     Returns
     -------
     tuple 
-        Returns a tuple of type (dynesty.results.Result, ndarray) with the 
+        Returns a tuple of type ``(dynesty.results.Result, ndarray)`` with the 
         object containing results of the Nested Sampling run and a numpy array
         with reweighted posterior samples.
     """
