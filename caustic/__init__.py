@@ -1,4 +1,3 @@
-from .data import *
-from .models import *
-from .trajectory import *
 from .utils import *
+
+from . import data, models, trajectory

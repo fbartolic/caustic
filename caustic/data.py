@@ -15,8 +15,9 @@ class Data:
     """
     Base class for microlensing data from various observatories. 
 
-    Subclasses should overload the :func:`Data.__load_data`. The time series
-    data is stored as a list of Astropy tables, one for each photometric filter.
+    Subclasses should overload the :func:`Data.__load_data` method. The time 
+    series data is stored as a list of Astropy tables, one for each photometric
+    filter.
 
     Parameters
     ----------
@@ -348,7 +349,9 @@ class Data:
 
     
 class OGLEData(Data):
-    """Subclass of data class for dealing with OGLE data."""
+    """
+    Subclass of data class for dealing with OGLE data.
+    """
     def __init__(
         self, 
         event_dir=None

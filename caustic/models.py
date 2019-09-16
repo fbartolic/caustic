@@ -62,7 +62,6 @@ class SingleLensModel(pm.Model):
         self.sig_F, _ = construct_masked_tensor(sig_F_list)
 
         self.errorbar_rescaling = errorbar_rescaling
-        self.kernel = kernel 
 
     def compute_magnification(self, u, u0):
         """

@@ -82,6 +82,27 @@ def estimate_t0(event):
 
 
 def revert_flux_params_to_nonstandardized_format(data, Delta_F, F_base, u_0):
+    """
+    Converts flux parameters :math:`(\Delta F,  F_\mathrm{base}` from units
+    suitable for modeling to physically more relevant quantities, the source 
+    star brightness in magnitudes and the blend ratio :math:`g=F_B/F_S`.
+    
+    Parameters
+    ----------
+    data : caustic.data
+        Microlensing event data. 
+    Delta_F : theano.tensor
+        Tensor of shape ``(n_bands)``.
+    F_base : theano.tensor
+        Tensor of shape ``(n_bands)``.
+    u_0 : theano.tensor
+        Lens--source separation at time :math:`t_0`.
+    
+    Returns
+    -------
+    tuple
+        m_source, g.
+    """
     # Revert F_base and Delta_F to non-standardized units
     data.units = 'fluxes'
     fluxes_median = np.zeros(len(data.light_curves))
@@ -134,17 +155,17 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
     trace : PyMC3 MultiTrace object or ndarray
         Trace object containing samples from posterior. Assumed to be either
         a PyMC3 MultiTrace object, or a numpy array of shape 
-        (n_samples, n_vars) containing raw samples in the transformed parameter
-        space (without deterministic variables).
+        ``(n_samples, n_vars)`` containing raw samples in the transformed 
+        parameter space (without deterministic variables).
     t_grid : theano.tensor
         Times at which we want to evaluate model predictions. Shape 
-        (n_bands, n_pts).
+        ``(n_bands, n_pts)``.
     prediction : theano.tensor
-        Model prediction evaluated at t_grid.
+        Model prediction evaluated at ``t_grid``.
     n_samples: int
         Number of posterior draws to be plotted.
     gp_list : list
-        List of `exoplanet.gp.GP` objects, one per each band. If these
+        List of ``exoplanet.gp.GP`` objects, one per each band. If these
         are provided the likelihood which is computed is the GP marginal
         likelihood.
     """
@@ -228,7 +249,7 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
     Parameters
     ----------
     ax : matplotlib.axes 
-        Needs to be of shape (2, 1).
+        Needs to be of shape ``(2, 1)``.
     data : caustic.data 
         Microlensing event data. 
     pm_model : pymc3.Model
@@ -239,11 +260,11 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
         prediction tensor.
     t_grid : theano.tensor
         Times at which we want to evaluate model predictions. Shape 
-        (n_bands, n_pts).
+        ``(n_bands, n_pts)``.
     prediction : theano.tensor
-        Model prediction evaluated at t_grid.
+        Model prediction evaluated at ``t_grid``.
     gp_list : list
-        List of `exoplanet.gp.GP` objects, one per each band. If these
+        List of ``exoplanet.gp.GP`` objects, one per each band. If these
         are provided the likelihood which is computed is the GP marginal
         likelihood.
     """
@@ -427,16 +448,16 @@ def sample_with_dynesty(pm_model, prior_transform, sampler_kwargs={},
         Dyensty samples in a prior space where all parameters are i.i.d within
         a a D-dimensional unit cube. For independent parameters, this would be 
         the product of the inverse cumulative distribution function (CDF) 
-        associated with each parameter. The function `prior_transform` should
+        associated with each parameter. The function should
         take an array of these uniformly distributed prior parameters and 
         transform them according to the actual prior we'd like to use. See
         the `dynesty` documentation for more details.
     sampler_kwargs: dict
-        Additional arguments passed to the `dynesty.DynamicNestedSampler` 
+        Additional arguments passed to the :code:`dynesty.DynamicNestedSampler` 
         method.
     run_sampler_kwargs: dict
         Additional arguments passed to the 
-        `dynesty.DynamicNestedSampler.run_nested` method.
+        :code:`dynesty.DynamicNestedSampler.run_nested` method.
 
     Returns
     -------
