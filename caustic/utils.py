@@ -83,7 +83,7 @@ def estimate_t0(event):
 
 def revert_flux_params_to_nonstandardized_format(data, Delta_F, F_base, u_0):
     """
-    Converts flux parameters :math:`(\Delta F,  F_\mathrm{base}` from units
+    Converts flux parameters :math:`(\Delta F,  F_\mathrm{base})` from units
     suitable for modeling to physically more relevant quantities, the source 
     star brightness in magnitudes and the blend ratio :math:`g=F_B/F_S`.
     
