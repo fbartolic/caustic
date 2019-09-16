@@ -4,6 +4,7 @@
 <a href="https://caustic.readthedocs.io/en/latest/">
 <img src="https://img.shields.io/badge/read-the%20docs-blue"/></a>
 <br>
+<a href="https://docs.pymc.io/">
 <img src="https://img.shields.io/badge/powered_by-PyMC3-EB5368.svg?style=flat"></a>
 <a href="http://www.astropy.org">
 <img src="https://img.shields.io/badge/powered_by-AstroPy-EB5368.svg?style=flat"></a>
