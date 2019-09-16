@@ -7,18 +7,34 @@ API Documentation
 Data 
 ----
     
-.. autoclass:: caustic.data
-   :inherited_members:
+.. autoclass:: caustic.data.Data
+    :members:
+    :inherited-members:
+
+.. autoclass caustic.data.OGLEData
+   :members:
+   :inherited-members:
+.. autoclass caustic.data.MOAData
+   :members:
+   :inherited-members:
+.. autoclass caustic.data.KMTData
+   :members:
+   :inherited-members:
+.. autoclass caustic.data.NASAExoArchiveDatak
+   :members:
+   :inherited-members:
 
 Models 
 ------
 
-.. autoclass:: caustic.models
+.. autoclass:: caustic.models.SingleLensModel
+   :members:
 
 Trajectory
 ----------
 
-.. autoclass:: caustic.trajectory
+.. autoclass:: caustic.trajectory.Trajectory
+   :members:
 
 Utils
 -----
