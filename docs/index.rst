@@ -1,8 +1,10 @@
+.. module:: caustic
+
 caustic
 =======
 
 caustic is a code designed for Bayesian modeling of single-lens gravitational microlensing 
-events using the `PyMC3 <https://docs.pymc.io/>`_ probabilistic programming language enabling 
+events using the `PyMC3 <https://docs.pymc.io/>`_ probabilistic programming language which enables
 the use of gradient based inference algorithms such as 
 `Hamiltonian Monte Carlo <http://arogozhnikov.github.io/2016/12/19/markov_chain_monte_carlo.html>`_. 
 It is built on top of `theano <http://deeplearning.net/software/theano/>`_, 
