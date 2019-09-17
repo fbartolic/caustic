@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 from io import StringIO
 import re
 import os
+import copy
 
 
 from astropy.coordinates import SkyCoord
@@ -202,13 +203,14 @@ class Data:
         is more suitable for subsequent modeling. The conversion from fluxes
         to magnitudes defines a flux of 1 to correspond to magnitude 22.
         """
-        if not (self.units=='fluxes'):
-            self.units = 'fluxes'
+        tmp_data = copy.deepcopy(self)
+        if not (tmp_data.units=='fluxes'):
+            tmp_data.units = 'fluxes'
 
         # Subtract the median from the data such that baseline is at approx 
         # zero, rescale the data such that it has unit variance
-        stanardized_data = []
-        for i, table in enumerate(self.__tables):
+        standardized_data = []
+        for i, table in enumerate(tmp_data.light_curves):
             mask = table['mask']
             table_std = Table()
             table_std.meta = table.meta
@@ -216,12 +218,9 @@ class Data:
             table_std['flux'] = (table['flux'][mask] -\
                 np.median(table['flux'][mask]))/np.std(table['flux'][mask])
             table_std['flux_err'] = table['flux_err'][mask]/np.std(table['flux'][mask])
-            stanardized_data.append(table_std)
+            standardized_data.append(table_std)
 
-        # Convert back to magnitudes
-        self.__convert_data_to_magnitudes()
-
-        return stanardized_data
+        return standardized_data
 
     def plot(self, ax):
         """
@@ -466,7 +465,7 @@ class KMTData(Data):
     ):
         super(KMTData, self).__init__(event_dir)
         self.__load_data(event_dir)
-        self.__units = 'fluxes'
+        self._Data__units = 'fluxes'
 
     def __load_data(self, event_dir):
         """Returns a table with raw data."""
