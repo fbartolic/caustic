@@ -10,5 +10,6 @@ dependencies:
 - pandas
 - scipy
 - pymc3
-- exoplanet
 - astropy
+- pip:
+    - exoplanet 
