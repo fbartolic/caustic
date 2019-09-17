@@ -5,7 +5,7 @@ from caustic.data import OGLEData
 
 np.random.seed(42)
 
-event = OGLEData("../../data/OGLE-2017-BLG-0324")
+event = OGLEData("data/OGLE-2017-BLG-0324")
 
 def test_convert_data_to_fluxes():
     """Tests the consistency between conversion to fluxes and magnitudes."""
