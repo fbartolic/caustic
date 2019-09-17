@@ -20,10 +20,8 @@ extensions = [
     'nbsphinx',
 ]
 
-#autodoc_mock_imports = ["numpy", "scipy", "astropy", "pymc3", "theano", 
-#    "exoplanet", "matplotlib"]
-
-autodoc_mock_imports = ["theano"]
+autodoc_mock_imports = ["numpy", "scipy", "astropy", "pymc3", "theano", 
+    "exoplanet", "matplotlib"]
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3/", None),

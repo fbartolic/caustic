@@ -1,10 +1,10 @@
-import sys
-sys.path.append("../codebase/")
-from Data import OGLEData
 import numpy as np
-import pandas as pd
 
-event = OGLEData('blg-0476')
+import caustic as ca
+
+np.random.seed(42)
+
+event_ogle = ca.data.OGLEData("../../data/OGLE-2017-BLG-0324")
 
 def test_convert_data_to_fluxes():
     """Tests the consistency between conversion to fluxes and magnitudes."""
