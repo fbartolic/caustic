@@ -2,6 +2,9 @@
 # import sys
 # sys.path.insert(0, os.path.abspath('.'))
 
+autodoc_mock_imports = ["numpy", "scipy", "astropy", "pymc3", "theano", 
+    "exoplanet", "matplotlib"]
+
 import sphinx_rtd_theme
 
 # -- Project information -----------------------------------------------------
@@ -20,8 +23,6 @@ extensions = [
     'nbsphinx',
 ]
 
-autodoc_mock_imports = ["numpy", "scipy", "astropy", "pymc3", "theano", 
-    "exoplanet"]
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3/", None),
