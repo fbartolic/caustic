@@ -12,6 +12,6 @@ dependencies:
 - pymc3
 - astropy
 - pip:
-    - exoplanet 
+    - exoplanet==0.2.0
     - nbsphinx
     - sphinx-rtd-theme
