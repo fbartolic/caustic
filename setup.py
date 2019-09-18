@@ -16,7 +16,7 @@ with open(os.path.join(dirname, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="caustic",
-    version="0.1.0",
+    version="0.1.0dev",
     author="Fran Bartolić",
     author_email="fb90@st-andrews.ac.uk",
     url="https://github.com/fbartolic/caustic",
