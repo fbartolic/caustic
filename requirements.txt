@@ -1,4 +1,4 @@
-theano>=1.0.0
+theano>=1.0.4
 numpy>=1.13.0
 pymc3>=3.6
 exoplanet>=0.2.0
