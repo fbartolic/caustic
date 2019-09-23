@@ -66,7 +66,6 @@ def estimate_t0(event):
     and the sampler usually fails to converge if :math:`t_0` is not close 
     to true value.
     """
-    event.remove_worst_outliers(window_size=20, mad_cutoff=2)
     tables = event.get_standardized_data()
     fluxes = np.concatenate([table['flux'] for table in tables])
     times = np.concatenate([table['HJD'] for table in tables])
