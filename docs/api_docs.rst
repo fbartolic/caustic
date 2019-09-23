@@ -40,7 +40,7 @@ Utils
 -----
 
 .. autofunction:: caustic.estimate_t0
-.. autofunction:: caustic.revert_flux_params_to_nonstandardized_format
+.. autofunction:: caustic.compute_source_mag_and_blend_fraction
 .. autofunction:: caustic.plot_model_and_residuals
 .. autofunction:: caustic.plot_map_model_and_residuals
 .. autofunction:: caustic.plot_trajectory_from_samples

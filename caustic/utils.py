@@ -80,11 +80,12 @@ def estimate_t0(event):
     return guess
 
 
-def revert_flux_params_to_nonstandardized_format(data, Delta_F, F_base, u_0):
+def compute_source_mag_and_blend_fraction(data, Delta_F, F_base, u_0, 
+        standardized=True):
     """
-    Converts flux parameters :math:`(\Delta F,  F_\mathrm{base})` from units
-    suitable for modeling to physically more relevant quantities, the source 
-    star brightness in magnitudes and the blend ratio :math:`g=F_B/F_S`.
+    Converts flux parameters :math:`(\Delta F,  F_\mathrm{base})` to physically
+    more relevant interesting quantities, the source  star brightness in 
+    magnitudes and the blend ratio :math:`g=F_B/F_S`.
     
     Parameters
     ----------
@@ -96,26 +97,33 @@ def revert_flux_params_to_nonstandardized_format(data, Delta_F, F_base, u_0):
         Tensor of shape ``(n_bands)``.
     u_0 : theano.tensor
         Lens--source separation at time :math:`t_0`.
+    standardized : bool
+        Wether or not the flux is standardized to unit std deviation and zero
+        median. By default ``True``.
     
     Returns
     -------
     tuple
         ``(m_source, g)``.
     """
-    # Revert F_base and Delta_F to non-standardized units
-    data.units = 'fluxes'
-    fluxes_median = np.zeros(len(data.light_curves))
-    fluxes_std = np.zeros(len(data.light_curves))
+    if standardized==True:
+        # Revert F_base and Delta_F to non-standardized units
+        data.units = 'fluxes'
+        fluxes_median = np.zeros(len(data.light_curves))
+        fluxes_std = np.zeros(len(data.light_curves))
 
-    for i, table in enumerate(data.light_curves):
-        mask = table['mask']
-        fluxes_median[i] = np.median(table['flux'][mask])
-        fluxes_std[i] = np.std(table['flux'][mask])
+        for i, table in enumerate(data.light_curves):
+            mask = table['mask']
+            fluxes_median[i] = np.median(table['flux'][mask])
+            fluxes_std[i] = np.std(table['flux'][mask])
 
-    # Flux parameters to standard flux units 
-    Delta_F_ = T.as_tensor_variable(fluxes_std)*Delta_F 
-    F_base_ = T.as_tensor_variable(fluxes_std)*F_base +\
-        T.as_tensor_variable(fluxes_median)
+        # Flux parameters to standard flux units 
+        Delta_F_ = T.as_tensor_variable(fluxes_std)*Delta_F 
+        F_base_ = T.as_tensor_variable(fluxes_std)*F_base +\
+            T.as_tensor_variable(fluxes_median)
+    else:
+        Delta_F_ = Delta_F
+        F_base_ = F_base
 
     # Calculate source flux and blend flux
     A_u0 = (u_0**2 + 2)/(T.abs_(u_0)*T.sqrt(u_0**2 + 4))
