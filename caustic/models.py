@@ -42,9 +42,9 @@ class SingleLensModel(pm.Model):
 
         if standardize==True:
             # Load data standardized to zero median and unit variance
-            tables = data.__get_standardized_data()
+            tables = data.get_standardized_data()
         else:
-            tables = data.__get_standardized_data(rescale=False)
+            tables = data.get_standardized_data(rescale=False)
 
         self.standardized_data = standardize
         self.n_bands = len(tables) # number of photometric bands

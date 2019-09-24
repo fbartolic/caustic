@@ -59,14 +59,25 @@ def construct_masked_tensor(array_list):
     return tensor, mask
 
 
-def estimate_t0(event):
+def estimate_t0(data):
     """
     Estimates the initial value for the :math:`t_0` parameter. This is 
     necessary because the posterior is highly multi-modal in :math:`t_0` 
     and the sampler usually fails to converge if :math:`t_0` is not close 
     to true value.
+
+    Parameters
+    ----------
+    data : :func:`~caustic.data.Data`
+        Microlensing event data. 
+
+    Returns
+    -------
+    float
+        Estimate of :math:`t_0`.
+
     """
-    tables = event.__get_standardized_data()
+    tables = data.get_standardized_data()
     fluxes = np.concatenate([table['flux'] for table in tables])
     times = np.concatenate([table['HJD'] for table in tables])
 
@@ -78,6 +89,58 @@ def estimate_t0(event):
         cut -= 0.5
 
     return guess
+
+
+def estimate_baseline_flux(data):
+    """
+    Estimator for the baseline flux of an event.
+    
+    Parameters
+    ----------
+    data : :func:`~caustic.data.Data`
+        Microlensing event data. 
+
+    Returns
+    -------
+    ndarray 
+        Estimate of baseline flux in each band.
+    """
+    tables = data.get_standardized_data(rescale=False)
+
+    fluxes = []
+
+    for table in tables:
+        fluxes.append(np.median(table['flux']))
+
+    return np.array(fluxes)
+
+
+def estimate_peak_flux(data):
+    """
+    Estimator for peak flux of light curves.
+
+    Parameters
+    ----------
+    data : :func:`~caustic.data.Data`
+        Microlensing event data. 
+
+    Returns
+    -------
+    ndarray 
+        Estimate of peak flux in each band.
+    """
+    tables = data.get_standardized_data(rescale=False)
+
+    fluxes = []
+
+    t_0 = estimate_t0(data)
+
+    for table in tables:
+        times = np.array(table['HJD'])
+        idx = (np.abs(times - t_0)).argmin()
+        fluxes.append(np.median(table['flux'][idx-5:idx+5]))
+
+    return np.array(fluxes)
 
 
 def compute_source_mag_and_blend_fraction(data, pm_model, Delta_F, F_base, u_0):
@@ -188,9 +251,9 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
 
     # Load data
     if pm_model.standardized_data==True:
-        tables = data.__get_standardized_data()
+        tables = data.get_standardized_data()
     else:
-        tables = data.__get_standardized_data(rescale=False)
+        tables = data.get_standardized_data(rescale=False)
 
     # Evaluate model for each sample on a fine grid
     n_pts_dense = T.shape(t_grid)[1].eval()
@@ -282,9 +345,9 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
     """
     # Load data
     if pm_model.standardized_data==True:
-        tables = data.__get_standardized_data()
+        tables = data.get_standardized_data()
     else:
-        tables = data.__get_standardized_data(rescale=False)
+        tables = data.get_standardized_data(rescale=False)
 
     # Evaluate model for each sample on a fine grid
     n_pts_dense = T.shape(t_grid)[1].eval()
