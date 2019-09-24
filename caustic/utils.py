@@ -66,7 +66,7 @@ def estimate_t0(event):
     and the sampler usually fails to converge if :math:`t_0` is not close 
     to true value.
     """
-    tables = event.get_standardized_data()
+    tables = event.__get_standardized_data()
     fluxes = np.concatenate([table['flux'] for table in tables])
     times = np.concatenate([table['HJD'] for table in tables])
 
@@ -80,8 +80,7 @@ def estimate_t0(event):
     return guess
 
 
-def compute_source_mag_and_blend_fraction(data, Delta_F, F_base, u_0, 
-        standardized=True):
+def compute_source_mag_and_blend_fraction(data, pm_model, Delta_F, F_base, u_0):
     """
     Converts flux parameters :math:`(\Delta F,  F_\mathrm{base})` to physically
     more relevant interesting quantities, the source  star brightness in 
@@ -91,6 +90,9 @@ def compute_source_mag_and_blend_fraction(data, Delta_F, F_base, u_0,
     ----------
     data : :func:`~caustic.data.Data`
         Microlensing event data. 
+    pm_model : pymc3.Model
+        PyMC3 model object which was used to obtain posterior samples in the
+        trace.
     Delta_F : theano.tensor
         Tensor of shape ``(n_bands)``.
     F_base : theano.tensor
@@ -106,7 +108,7 @@ def compute_source_mag_and_blend_fraction(data, Delta_F, F_base, u_0,
     tuple
         ``(m_source, g)``.
     """
-    if standardized==True:
+    if pm_model.standardized_data==True:
         # Revert F_base and Delta_F to non-standardized units
         data.units = 'fluxes'
         fluxes_median = np.zeros(len(data.light_curves))
@@ -184,8 +186,11 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
     else: 
         samples = xo.get_samples_from_trace(trace, size=n_samples)
 
-    # Load standardized data
-    tables = data.get_standardized_data()
+    # Load data
+    if pm_model.standardized_data==True:
+        tables = data.__get_standardized_data()
+    else:
+        tables = data.__get_standardized_data(rescale=False)
 
     # Evaluate model for each sample on a fine grid
     n_pts_dense = T.shape(t_grid)[1].eval()
@@ -225,7 +230,7 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
             [16, 50, 84], axis=0)[1]
 
     # Plot data
-    data.plot_standardized_data(ax[0])
+    data.plot_standardized_data(ax[0], rescale=pm_model.standardized_data)
     ax[0].set_xlabel(None)
     ax[1].set_xlabel('HJD - 2450000')
     ax[1].set_ylabel('Residuals')
@@ -275,8 +280,11 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
         are provided the likelihood which is computed is the GP marginal
         likelihood.
     """
-    # Load standardized data
-    tables = data.get_standardized_data()
+    # Load data
+    if pm_model.standardized_data==True:
+        tables = data.__get_standardized_data()
+    else:
+        tables = data.__get_standardized_data(rescale=False)
 
     # Evaluate model for each sample on a fine grid
     n_pts_dense = T.shape(t_grid)[1].eval()
@@ -304,7 +312,7 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
             color='C' + str(n), **kwargs)
 
     # Plot data
-    data.plot_standardized_data(ax[0])
+    data.plot_standardized_data(ax[0], rescale=pm_model.standardized_data)
     ax[0].set_xlabel(None)
     ax[1].set_xlabel('HJD - 2450000')
     ax[1].set_ylabel('Residuals')
@@ -322,7 +330,7 @@ def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid,
         ax[1].grid(True)
 
 
-def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e, 
+def plot_trajectory_from_samples(ax, pm_model, trace, t_grid, u_n, u_e, 
         n_samples=50, color='C0', **kwargs):
     """
     Plots the trajectory of the lens with respect to the source on the plane of
@@ -333,8 +341,6 @@ def plot_trajectory_from_samples(ax, data, pm_model, trace, t_grid, u_n, u_e,
     ----------
     ax : matplotlib.axes 
         Needs to be of shape ``(2, 1)``.
-    data : :func:`~caustic.data.Data`
-        Microlensing event data. 
     pm_model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
         trace.

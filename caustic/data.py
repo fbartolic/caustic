@@ -195,29 +195,56 @@ class Data:
 
         return mu_m, sig_m
 
-    def get_standardized_data(self):  
+    def get_standardized_data(self, rescale=True):  
         """
-        This function returns data tables in a standardized format, expressed in 
-        flux units rescaled to zero  median and unit variance, a format which 
-        is more suitable for subsequent modeling. The conversion from fluxes
-        to magnitudes defines a flux of 1 to correspond to magnitude 22.
+        This function returns the light curves as a list of astropy tables in 
+        a format more suitable for modeling. In particular, the value of 
+        2450000 is subtracted from the time axis, and if any sort of masks
+        are specified for each light curve, the masked data is returned. 
+        The conversion from fluxes to magnitudes defines a flux of 1 
+        to correspond to magnitude 22. In addition if ``rescale=True``, the 
+        flux for all light curves is independently rescaled to zero median and 
+        unit variance. The conversion from fluxes to magnitudes defines a 
+        flux of 1 to correspond to magnitude 22. 
+
+        Parameters
+        ----------
+        rescale : bool
+            If true, the flux for all light curves is independently rescaled 
+            to zero median and unit variance. By default ``True``.
+        
+        Returns
+        -------
+        list
+            List of :class:``astropy.table.table.Table()`` tables, each table
+            corresponding to a given observing band.
         """
         tmp_data = copy.deepcopy(self)
         if not (tmp_data.units=='fluxes'):
             tmp_data.units = 'fluxes'
 
-        # Subtract the median from the data such that baseline is at approx 
-        # zero, rescale the data such that it has unit variance
         standardized_data = []
-        for i, table in enumerate(tmp_data.light_curves):
-            mask = table['mask']
-            table_std = Table()
-            table_std.meta = table.meta
-            table_std['HJD'] = table['HJD'][mask] - 2450000
-            table_std['flux'] = (table['flux'][mask] -\
-                np.median(table['flux'][mask]))/np.std(table['flux'][mask])
-            table_std['flux_err'] = table['flux_err'][mask]/np.std(table['flux'][mask])
-            standardized_data.append(table_std)
+        if rescale==True:
+            # Subtract the median from the data such that baseline is at approx 
+            # zero, rescale the data such that it has unit variance
+            for i, table in enumerate(tmp_data.light_curves):
+                mask = table['mask']
+                table_std = Table()
+                table_std.meta = table.meta
+                table_std['HJD'] = table['HJD'][mask] - 2450000
+                table_std['flux'] = (table['flux'][mask] -\
+                    np.median(table['flux'][mask]))/np.std(table['flux'][mask])
+                table_std['flux_err'] = table['flux_err'][mask]/np.std(table['flux'][mask])
+                standardized_data.append(table_std)
+        else:
+            for i, table in enumerate(tmp_data.light_curves):
+                mask = table['mask']
+                table_std = Table()
+                table_std.meta = table.meta
+                table_std['flux'] = table['flux'][mask]
+                table_std['flux_err'] = table['flux_err'][mask]
+                table_std['HJD'] = table['HJD'][mask] - 2450000
+                standardized_data.append(table_std)
 
         return standardized_data
 
@@ -258,15 +285,22 @@ class Data:
         ax.grid(True)
         ax.legend(prop={'size': 16})
 
-    def plot_standardized_data(self, ax):
+    def plot_standardized_data(self, ax, rescale=True):
         """
         Plots data in standardized modeling format.
         
         Parameters
         ----------
         ax : Matplotlib axes object
+
+        rescale : bool
+            If true, the flux for all light curves is independently rescaled 
+            to zero median and unit variance. By default ``True``.
         """
-        std_tables = self.get_standardized_data()
+        if rescale==True:
+            std_tables = self.get_standardized_data()
+        else:
+            std_tables = self.get_standardized_data(rescale=False)
 
         # Plot masked data
         for i, table in enumerate(std_tables):

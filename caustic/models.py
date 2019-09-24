@@ -3,6 +3,7 @@ import pymc3 as pm
 import theano
 import theano.tensor as T
 from matplotlib import pyplot as plt
+import copy
 
 
 from .utils import construct_masked_tensor, estimate_t0
@@ -26,16 +27,26 @@ class SingleLensModel(pm.Model):
     ----------
     data : :func:`~caustic.data.Data`
         Caustic data object.
+    standardize : bool
+        If ``True``, the fluxes for each band will be independently rescaled
+        to zero medain and unit standard deviation. This generally improves 
+        the sampling efficiency. By default ``True``.
     """
     #  override __init__ function from pymc3 Model class
     def __init__(
         self, 
         data=None, 
+        standardize=True
     ):
         super(SingleLensModel, self).__init__()
 
-        # Load data standardized to zero median and unit variance
-        tables = data.get_standardized_data()
+        if standardize==True:
+            # Load data standardized to zero median and unit variance
+            tables = data.__get_standardized_data()
+        else:
+            tables = data.__get_standardized_data(rescale=False)
+
+        self.standardized_data = standardize
         self.n_bands = len(tables) # number of photometric bands
 
         # Useful attributes
