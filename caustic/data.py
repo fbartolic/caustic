@@ -299,8 +299,10 @@ class Data:
         """
         if rescale==True:
             std_tables = self.get_standardized_data()
+            label = 'Flux (normalized)'
         else:
             std_tables = self.get_standardized_data(rescale=False)
+            label = 'Flux'
 
         # Plot masked data
         for i, table in enumerate(std_tables):
