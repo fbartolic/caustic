@@ -272,11 +272,14 @@ class Data:
             ax.set_ylabel(unit)
 
             # Plot masked data
-            ax.errorbar(table['HJD'][~mask] - 2450000,
-                table[unit][~mask], 
-                table[unit + '_err'][~mask], fmt='o', color='C' + str(i),
-                ecolor='C' + str(i), alpha=0.1)
-
+            if np.any(table['HJD'][~mask]):
+                ax.errorbar(table['HJD'][~mask] - 2450000,
+                    table[unit][~mask], 
+                    table[unit + '_err'][~mask], fmt='o', color='C' + str(i),
+                    label=table.meta['observatory'] + ' ' + table.meta['filter'] +\
+                        ' masked', 
+                    ecolor='C' + str(i), alpha=0.1)
+           
         if (self.__units=='magnitudes'):
             ax.invert_yaxis()
 
