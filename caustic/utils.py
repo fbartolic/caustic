@@ -140,6 +140,10 @@ def estimate_peak_flux(data):
         idx = (np.abs(times - t_0)).argmin()
         fluxes.append(np.median(table['flux'][idx-5:idx+5]))
 
+    # Make sure that the estimated peak flux is greater than baseline flux
+    if np.any(estimate_baseline_flux(data) > np.array(fluxes)):
+        return 1.1*estimate_baseline_flux(data) 
+
     return np.array(fluxes)
 
 
