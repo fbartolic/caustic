@@ -316,7 +316,7 @@ def plot_model_and_residuals(ax, data, pm_model, trace, t_grid, prediction,
 
 
 def plot_map_model_and_residuals(ax, data, pm_model, map_point, t_grid, 
-        prediction, gp_list, **kwargs):
+        prediction, gp_list=None, **kwargs):
     """
     Plots model in data space given samples from the posterior 
     distribution. Also plots residuals with respect to the median model, where 
