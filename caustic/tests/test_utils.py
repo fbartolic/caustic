@@ -1,12 +1,10 @@
 import numpy as np
-import theano.tensor as T
 import pymc3 as pm
+import theano.tensor as T
 from exoplanet import eval_in_model
-from caustic import (
-    construct_masked_tensor,
-    get_log_likelihood_function,
-    get_log_probability_function,
-)
+
+from caustic import (construct_masked_tensor, get_log_likelihood_function,
+                     get_log_probability_function)
 
 np.random.seed(42)
 

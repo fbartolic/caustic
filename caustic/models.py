@@ -1,21 +1,17 @@
+import copy
+
+import exoplanet as xo
 import numpy as np
 import pymc3 as pm
 import theano
 import theano.tensor as T
+from exoplanet.gp import GP, terms
 from matplotlib import pyplot as plt
-import copy
-
-
-from .utils import construct_masked_tensor, estimate_t0
-
-
-import exoplanet as xo
-from exoplanet.gp import terms, GP
-
-
+from scipy.optimize import fsolve
 from scipy.special import zeta
 from scipy.stats import invgamma
-from scipy.optimize import fsolve
+
+from .utils import construct_masked_tensor, estimate_t0
 
 
 class SingleLensModel(pm.Model):

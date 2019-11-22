@@ -1,14 +1,13 @@
-import numpy as np 
-from matplotlib import pyplot as plt
-from io import StringIO
-import re
-import os
 import copy
+import os
+import re
+from io import StringIO
 
-
+import numpy as np
+from astropy import units as u
 from astropy.coordinates import SkyCoord
-from astropy import units as u 
 from astropy.table import Table
+from matplotlib import pyplot as plt
 
 
 class Data:
