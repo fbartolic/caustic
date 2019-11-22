@@ -13,14 +13,6 @@ import logging
 logger = logging.getLogger("theano.gof.compilelock")
 logger.setLevel(logging.ERROR)
 
-import theano
-
-print("theano version: {0}".format(theano.__version__))
-
-import pymc3
-
-print("pymc3 version: {0}".format(pymc3.__version__))
-
 import matplotlib.pyplot as plt
 
 plt.style.use("default")
