@@ -635,6 +635,7 @@ def get_log_probability_function(model=None):
     ndarray
         Total log probability of the model.
     """
+    model = pm.modelcontext(model)
 
     f = theano.function(model.vars, [model.logpt])
 

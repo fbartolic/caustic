@@ -3,8 +3,11 @@ import pymc3 as pm
 import theano.tensor as T
 from exoplanet import eval_in_model
 
-from caustic import (construct_masked_tensor, get_log_likelihood_function,
-                     get_log_probability_function)
+from caustic import (
+    construct_masked_tensor,
+    get_log_likelihood_function,
+    get_log_probability_function,
+)
 
 np.random.seed(42)
 
@@ -38,7 +41,8 @@ def test_get_log_likelihood_function():
 
         pm.Potential("log_likelihood", T.sum(x1) * x2 + x3)
 
-    loglike = get_log_likelihood_function(model, model.log_likelihood)
+    with model:
+        loglike = get_log_likelihood_function(model.log_likelihood)
 
     with model:
         ll1 = eval_in_model(model.log_likelihood)
@@ -58,7 +62,8 @@ def test_get_log_probability_function():
 
         pm.Potential("log_likelihood", T.sum(x1) * x2 + x3)
 
-    logp = get_log_probability_function(model)
+    with model:
+        logp = get_log_probability_function()
 
     with model:
         logp1 = eval_in_model(model.logpt)
