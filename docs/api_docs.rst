@@ -46,5 +46,8 @@ Utils
 .. autofunction:: caustic.plot_model_and_residuals
 .. autofunction:: caustic.plot_map_model_and_residuals
 .. autofunction:: caustic.plot_trajectory_from_samples
-.. autofunction:: caustic.sample_with_dynesty
-.. autofunction:: caustic.compute_invgamma_params 
+.. autofunction:: caustic.compute_invgamma_params
+.. autofunction:: caustic.get_log_likelihood_function
+.. autofunction:: caustic.get_log_likelihood_function_grad
+.. autofunction:: caustic.get_log_probability_function
+.. autofunction:: caustic.get_log_probability_function_grad

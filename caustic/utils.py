@@ -42,7 +42,10 @@ def construct_masked_tensor(array_list):
         np.stack(
             [
                 np.pad(
-                    array, (0, n_max - len(array)), "constant", constant_values=(0.0,)
+                    array,
+                    (0, n_max - len(array)),
+                    "constant",
+                    constant_values=(0.0,),
                 )
                 for array in array_list
             ]
@@ -148,7 +151,9 @@ def estimate_peak_flux(data):
     return np.array(fluxes)
 
 
-def compute_source_mag_and_blend_fraction(data, Delta_F, F_base, u_0, model=None):
+def compute_source_mag_and_blend_fraction(
+    data, Delta_F, F_base, u_0, model=None
+):
     """
     Converts flux parameters :math:`(\Delta F,  F_\mathrm{base})` to physically
     more relevant interesting quantities, the source  star brightness in 
@@ -191,9 +196,9 @@ def compute_source_mag_and_blend_fraction(data, Delta_F, F_base, u_0, model=None
 
         # Flux parameters to standard flux units
         Delta_F_ = T.as_tensor_variable(fluxes_std) * Delta_F
-        F_base_ = T.as_tensor_variable(fluxes_std) * F_base + T.as_tensor_variable(
-            fluxes_median
-        )
+        F_base_ = T.as_tensor_variable(
+            fluxes_std
+        ) * F_base + T.as_tensor_variable(fluxes_median)
     else:
         Delta_F_ = Delta_F
         F_base_ = F_base
@@ -286,10 +291,14 @@ def plot_model_and_residuals(
             prediction_eval[i] = xo.eval_in_model(prediction, sample)
 
     else:
-        prediction_tensors = [gp_list[n].predict(t_grid[n]) for n in range(n_bands)]
+        prediction_tensors = [
+            gp_list[n].predict(t_grid[n]) for n in range(n_bands)
+        ]
         for i, sample in enumerate(samples):
             for n in range(n_bands):
-                prediction_eval[i, n] = xo.eval_in_model(prediction_tensors[n], sample)
+                prediction_eval[i, n] = xo.eval_in_model(
+                    prediction_tensors[n], sample
+                )
 
             # Add mean model to GP prediction
             prediction_eval[i] += xo.eval_in_model(prediction, sample)
@@ -309,9 +318,9 @@ def plot_model_and_residuals(
     # Compute median of the predictions
     median_predictions = np.zeros((n_bands, n_pts_dense))
     for n in range(n_bands):
-        median_predictions[n] = np.percentile(prediction_eval[n], [16, 50, 84], axis=0)[
-            1
-        ]
+        median_predictions[n] = np.percentile(
+            prediction_eval[n], [16, 50, 84], axis=0
+        )[1]
 
     # Plot data
     data.plot_standardized_data(ax[0], rescale=model.standardized_data)
@@ -405,7 +414,10 @@ def plot_map_model_and_residuals(
     # grid
     for n in range(n_bands):  # iterate over bands
         ax[0].plot(
-            t_grid[n].eval(), prediction_eval[n, :], color="C" + str(n), **kwargs
+            t_grid[n].eval(),
+            prediction_eval[n, :],
+            color="C" + str(n),
+            **kwargs,
         )
 
     # Plot data
@@ -554,7 +566,9 @@ def compute_invgamma_params(data):
     for i in range(n_bands):
         t_ = data.light_curves[i]["HJD"] - 2450000
         invgamma_a[i], invgamma_b[i] = fsolve(
-            solve_for_params, (0.1, 0.1), (np.median(np.diff(t_)), t_[-1] - t_[0])
+            solve_for_params,
+            (0.1, 0.1),
+            (np.median(np.diff(t_)), t_[-1] - t_[0]),
         )
 
     return (
@@ -614,6 +628,27 @@ def get_log_likelihood_function(ll_tensor, model=None):
     return log_likelihood
 
 
+def get_log_likelihood_function_grad(ll_tensor, model=None):
+    """
+    Same as :func:`caustic.utils.get_log_likelihood_function` except it returns
+    the gradient of the log likelihood obtained with autodiff.
+    """
+    model = pm.modelcontext(model)
+
+    variables = __get_untransformed_vars(model)
+    grad = T.grad(ll_tensor, variables)
+    f_grad = theano.function(variables, grad)
+
+    def log_likelihood_grad(params):
+        # For some reason bijection.rmap switches the ordering, hence [::-1]
+        dct = model.bijection.rmap(params[::-1])
+        args = (dct[k.name] for k in model.vars)
+        results = f_grad(*args)
+        return np.hstack([result.flatten() for result in results])
+
+    return log_likelihood_grad
+
+
 def get_log_probability_function(model=None):
     """
     Builds a theano function from a PyMC3 model which takes a numpy array of
@@ -646,3 +681,23 @@ def get_log_probability_function(model=None):
         return tuple(results)[0]
 
     return log_prob
+
+
+def get_log_probability_function_grad(ll_tensor, model=None):
+    """
+    Same as :func:`caustic.utils.get_log_probability_function_grad` except it
+    returns the gradient of the log probability obtained with autodiff.
+    """
+    model = pm.modelcontext(model)
+
+    grad = T.grad(ll_tensor, model.vars)
+    f_grad = theano.function(model.vars, grad)
+
+    def log_probability_grad(params):
+        # For some reason bijection.rmap switches the ordering, hence [::-1]
+        dct = model.bijection.rmap(params[::-1])
+        args = (dct[k.name] for k in model.vars)
+        results = f_grad(*args)
+        return np.hstack([result.flatten() for result in results])
+
+    return log_probability_grad
