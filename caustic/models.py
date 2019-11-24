@@ -1,17 +1,6 @@
-import copy
-
-import exoplanet as xo
 import numpy as np
 import pymc3 as pm
-import theano
 import theano.tensor as T
-from exoplanet.gp import GP, terms
-from matplotlib import pyplot as plt
-from scipy.optimize import fsolve
-from scipy.special import zeta
-from scipy.stats import invgamma
-
-from .utils import construct_masked_tensor, estimate_t0
 
 
 class SingleLensModel(pm.Model):
@@ -25,39 +14,39 @@ class SingleLensModel(pm.Model):
         Caustic data object.
     standardize : bool
         If ``True``, the fluxes for each band will be independently rescaled
-        to zero medain and unit standard deviation. This generally improves 
-        the sampling efficiency. By default ``True``.
+        to zero medain and unit standard deviation. This can sometime improve 
+        the sampling efficiency. By default ``False``.
     """
+
     #  override __init__ function from pymc3 Model class
-    def __init__(
-        self, 
-        data=None, 
-        standardize=True
-    ):
+    def __init__(self, data=None, standardize=False):
         super(SingleLensModel, self).__init__()
 
-        if standardize==True:
+        if standardize is True:
             # Load data standardized to zero median and unit variance
             tables = data.get_standardized_data()
         else:
             tables = data.get_standardized_data(rescale=False)
 
         self.standardized_data = standardize
-        self.n_bands = len(tables) # number of photometric bands
+        self.n_bands = len(tables)  # number of photometric bands
 
         # Useful attributes
-        self.t_min = np.min([table['HJD'][0] for table in tables])
-        self.t_max = np.max([table['HJD'][-1] for table in tables])
-        self.max_npoints = int(np.max([len(table['HJD']) for table in tables]))
+        self.t_min = np.min([table["HJD"][0] for table in tables])
+        self.t_max = np.max([table["HJD"][-1] for table in tables])
+        self.max_npoints = int(np.max([len(table["HJD"]) for table in tables]))
 
         # Construct tensors used for computing the models
-        t_list = [np.array(table['HJD']) for table in tables]
-        F_list = [np.array(table['flux']) for table in tables]
-        sig_F_list = [np.array(table['flux_err']) for table in tables]
-
-        self.t, self.mask = construct_masked_tensor(t_list)
-        self.F, _ = construct_masked_tensor(F_list)
-        self.sig_F, _ = construct_masked_tensor(sig_F_list)
+        self.t = [
+            T.as_tensor_variable(np.array(table["HJD"])) for table in tables
+        ]
+        self.F = [
+            T.as_tensor_variable(np.array(table["flux"])) for table in tables
+        ]
+        self.sigF = [
+            T.as_tensor_variable(np.array(table["flux_err"]))
+            for table in tables
+        ]
 
     def compute_magnification(self, u, u0):
         """
@@ -77,10 +66,10 @@ class SingleLensModel(pm.Model):
         theano.tensor
             The value of the magnification at each time t.
         """
-        A_u = (u**2 + 2)/(u*T.sqrt(u**2 + 4))
-        A_u0 = (u0**2 + 2)/(T.abs_(u0)*T.sqrt(u0**2 + 4))
+        A_u = (u ** 2 + 2) / (u * T.sqrt(u ** 2 + 4))
+        A_u0 = (u0 ** 2 + 2) / (T.abs_(u0) * T.sqrt(u0 ** 2 + 4))
 
-        return (A_u - 1)/(A_u0 - 1)
+        return (A_u - 1) / (A_u0 - 1)
 
     def compute_log_likelihood(self, r, var_F, gp_list=None, **kwargs):
         """"
@@ -91,10 +80,12 @@ class SingleLensModel(pm.Model):
 
         Parameters
         ----------
-        r : theano.tensor
-            Residuals of the mean model with respect to the data.
-        var_F : theano.tensor
-            Diagonal elements of the covariance matrix. 
+        r : list
+            List of :code:``theano.tensor`` residuals of the mean model with
+            respect to the data, one for each band.
+        var_F : list
+            List of :code:``theano.tensor`` diagonal elements of the
+            covariance matrix. 
         gp_list : list
             List of ``exoplanet.gp.GP`` objects, one per each band. If these
             are provided the likelihood which is computed is the GP marginal
@@ -102,25 +93,23 @@ class SingleLensModel(pm.Model):
 
         Returns
         -------
-        theano.tensor 
+        theano.tensor
             Log likelihood.
         """
-        ll = 0 
+        ll = 0
         # Iterate over all observed bands
         for i in range(self.n_bands):
-            r_ = r[i][self.mask[i].nonzero()]
-            var_F_ = var_F[i][self.mask[i].nonzero()]
-
-            if (gp_list==None):
-                ll += -0.5*T.sum(r_**2/var_F_) -\
-                    0.5*T.sum(T.log(2*np.pi*var_F_))
+            if gp_list is None:
+                ll += -0.5 * T.sum(r[i] ** 2 / var_F[i]) - 0.5 * T.sum(
+                    T.log(2 * np.pi * var_F[i])
+                )
             else:
-                ll += gp_list[i].log_likelihood(r_)
+                ll += gp_list[i].log_likelihood(r[i])
         return ll
-    
+
     def compute_marginalized_log_likelihood(self, magnification, var_F, L):
         """
-        Computes the multivariate guassian log-likelihood analytically 
+        Computes the multivariate guassian log-likelihood analytically
         marginalized over the linear flux parameters. 
         
         Parameters
@@ -137,11 +126,8 @@ class SingleLensModel(pm.Model):
             be equal for all bands, hence the matrix needs to be of shape 
             ``(2, 2)``.
         """
-        def log_likelihood_single_band(F, var_F, mag, mask):
-            F = F[mask.nonzero()]
-            var_F = var_F[mask.nonzero()]
-            mag = mag[mask.nonzero()]
 
+        def log_likelihood_single_band(F, var_F, mag):
             N = T.shape(F)[0]
 
             # Linear parameter matrix
@@ -152,33 +138,38 @@ class SingleLensModel(pm.Model):
             C = T.nlinalg.diag(C_diag)
 
             # Calculate inverse of covariance matrix for marginalized likelihood
-            inv_C = T.nlinalg.diag(T.pow(C_diag, -1.))
+            inv_C = T.nlinalg.diag(T.pow(C_diag, -1.0))
             ln_detC = T.log(C_diag).sum()
 
-            inv_L = T.nlinalg.diag(T.pow(T.nlinalg.diag(L), -1.))
+            inv_L = T.nlinalg.diag(T.pow(T.nlinalg.diag(L), -1.0))
             ln_detL = T.log(T.nlinalg.diag(L)).sum()
 
             S = inv_L + T.dot(A.transpose(), T.dot(inv_C, A))
             inv_S = T.nlinalg.matrix_inverse(S)
             ln_detS = T.log(T.nlinalg.det(S))
 
-            inv_SIGMA =inv_C -\
-                T.dot(inv_C, T.dot(A, T.dot(inv_S, T.dot(A.transpose(), inv_C))))
+            inv_SIGMA = inv_C - T.dot(
+                inv_C, T.dot(A, T.dot(inv_S, T.dot(A.transpose(), inv_C)))
+            )
             ln_detSIGMA = ln_detC + ln_detL + ln_detS
 
             # Calculate marginalized likelihood
-            ll = -0.5*T.dot(F.transpose(), T.dot(inv_SIGMA, F)) -\
-                0.5*N*np.log(2*np.pi) - 0.5*ln_detSIGMA
+            ll = (
+                -0.5 * T.dot(F.transpose(), T.dot(inv_SIGMA, F))
+                - 0.5 * N * np.log(2 * np.pi)
+                - 0.5 * ln_detSIGMA
+            )
 
             return ll
 
         # Compute the log-likelihood which is additive across different bands
-        ll = 0 
+        ll = 0
         for i in range(self.n_bands):
-            ll += log_likelihood_single_band(self.F[i], 
-                var_F[i], magnification[i], self.mask[i])
+            ll += log_likelihood_single_band(
+                self.F[i], var_F[i], magnification[i]
+            )
 
-        return ll 
+        return ll
 
     def generate_mock_dataset(self):
         """

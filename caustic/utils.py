@@ -6,63 +6,6 @@ import theano.tensor as T
 from matplotlib import pyplot as plt
 from pymc3.util import get_untransformed_name, is_transformed_name
 
-
-def construct_masked_tensor(array_list):
-    """
-    Given a list of 1D numpy arrays, this function returns a theano tensor
-    of shape ``(n_elements, n_max)`` where ``n_elements`` is the number of 
-    arrays in the list, and ``n_max`` is the length of the largest array 
-    in the list. The missing values are filled in with zeros and a mask is 
-    returned together with the tensor. 
-
-    Parameters
-    ----------
-    array_list : list 
-        List of numpy arrays of varying lengths. 
-    
-    Returns
-    -------
-    tuple 
-        Returns tuple ``(tensor, mask)`` where tensor and maks are 
-        ``theano.tensor`` objects of the same shape ``(n_elements, n_max)``. 
-        The mask tensor is of datta type ``int8`` and the elements are 
-        equal to 1 for non-filled in values and zero otherwise. To use
-        the mask in theano, use ``tensor[mask.nonzero()]``.
-
-    """
-    for array in array_list:
-        if array.ndim != 1:
-            raise ValueError(
-                "Make sure that all of the arrays are 1D and\
-            have the same dimension"
-            )
-
-    n_max = np.max([len(array) for array in array_list])
-    tensor = T.as_tensor_variable(
-        np.stack(
-            [
-                np.pad(
-                    array,
-                    (0, n_max - len(array)),
-                    "constant",
-                    constant_values=(0.0,),
-                )
-                for array in array_list
-            ]
-        )
-    )
-
-    masks_list = []
-
-    for array in array_list:
-        array = np.append(np.ones(len(array)), np.zeros(n_max - len(array)))
-        masks_list.append(array)
-
-    mask = T.as_tensor_variable(np.stack(masks_list).astype("int8"))
-
-    return tensor, mask
-
-
 def estimate_t0(data):
     """
     Estimates the initial value for the :math:`t_0` parameter. This is 
