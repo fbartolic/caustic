@@ -20,7 +20,9 @@ class Trajectory:
  
     """
 
-    def __init__(self, data=None, t_0=None, u_0=None, t_E=None, pi_EE=None, pi_EN=None):
+    def __init__(
+        self, data=None, t_0=None, u_0=None, t_E=None, pi_EE=None, pi_EN=None
+    ):
         self.data = data
         self.t_0 = t_0
         self.u_0 = u_0
@@ -50,7 +52,9 @@ class Trajectory:
             a_t = np.gradient(v_t, axis=0)
 
             # Project vectors onto the plane of the sky
-            zeta_e, zeta_n = self.__project_vector_on_sky(s_t, data.event_coordinates)
+            zeta_e, zeta_n = self.__project_vector_on_sky(
+                s_t, data.event_coordinates
+            )
             zeta_e_dot, zeta_n_dot = self.__project_vector_on_sky(
                 v_t, data.event_coordinates
             )
@@ -90,9 +94,9 @@ class Trajectory:
 
     def __project_vector_on_sky(self, matrix, coordinates):
         """
-        This function takes a 3D cartesian vector specified
-        in the ICRS coordinate system and evaluated at differrent
-        times :math:`(t_i,\dots, t_N)` and projects it onto a spherical coordinate
+        This function takes a 3D cartesian vector specified in the ICRS 
+        coordinate system and evaluated at differrent times 
+        :math:`(t_i,\dots, t_N)` and projects it onto a spherical coordinate
         system on the plane of the sky with the origin at the position
         defined by the coordinates.
         
@@ -153,14 +157,18 @@ class Trajectory:
         zeta_e = T.concatenate(zeta_e_list, axis=1)
         zeta_n = T.concatenate(zeta_n_list, axis=1)
 
-        zeta_e_t_0 = self.zeta_e_interp.evaluate(T.reshape(self.t_0, (1, 1)))[0, 0]
-        zeta_n_t_0 = self.zeta_n_interp.evaluate(T.reshape(self.t_0, (1, 1)))[0, 0]
-        zeta_e_dot_t_0 = self.zeta_e_dot_interp.evaluate(T.reshape(self.t_0, (1, 1)))[
+        zeta_e_t_0 = self.zeta_e_interp.evaluate(T.reshape(self.t_0, (1, 1)))[
             0, 0
         ]
-        zeta_n_dot_t_0 = self.zeta_n_dot_interp.evaluate(T.reshape(self.t_0, (1, 1)))[
+        zeta_n_t_0 = self.zeta_n_interp.evaluate(T.reshape(self.t_0, (1, 1)))[
             0, 0
         ]
+        zeta_e_dot_t_0 = self.zeta_e_dot_interp.evaluate(
+            T.reshape(self.t_0, (1, 1))
+        )[0, 0]
+        zeta_n_dot_t_0 = self.zeta_n_dot_interp.evaluate(
+            T.reshape(self.t_0, (1, 1))
+        )[0, 0]
 
         # Compute delta_zeta function
         delta_zeta_e = zeta_e - zeta_e_t_0 - (t - self.t_0) * zeta_e_dot_t_0
@@ -176,18 +184,18 @@ class Trajectory:
         Parameters
         ----------
         t : theano.tensor
-            Tensor containing times for which :math:`\mathbf{u}(t)` is to 
+            Tensor containing times for which :math:`\mathbf{u}(t)` is to
             be computed. Needs to have shape ``(n_bands, npoints)``
         return_components : bool, optional
-            If true, the function returns the vector components 
-            :math:`(u_n, u_e)` of :math:`\mathbf{u}(t)` rather than its 
+            If true, the function returns the vector components
+            :math:`(u_n, u_e)` of :math:`\mathbf{u}(t)` rather than its
             magnitude, by default False.
 
         Returns
         -------
         theano.tensor
-            The magnitude of the separation vector :math:`\mathbf{u}(t)` 
-            for each time or a tuple with the two components of 
+            The magnitude of the separation vector :math:`\mathbf{u}(t)`
+            for each time or a tuple with the two components of
             :math:`\mathbf{u}(t)` in (north, east) basis.
         """
         if (self.pi_EE or self.pi_EN) is None:
@@ -218,7 +226,11 @@ class Trajectory:
         else:
             delta_zeta_n, delta_zeta_e = self.__compute_delta_zeta(t)
 
-            u_per = self.u_0 + self.pi_EN * delta_zeta_e - self.pi_EE * delta_zeta_n
+            u_per = (
+                self.u_0
+                + self.pi_EN * delta_zeta_e
+                - self.pi_EE * delta_zeta_n
+            )
             u_par = (
                 (t - self.t_0) / self.t_E
                 + self.pi_EE * delta_zeta_e

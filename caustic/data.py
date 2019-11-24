@@ -7,7 +7,6 @@ import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
-from matplotlib import pyplot as plt
 
 
 class Data:

@@ -6,11 +6,12 @@ import theano.tensor as T
 from matplotlib import pyplot as plt
 from pymc3.util import get_untransformed_name, is_transformed_name
 
+
 def estimate_t0(data):
     """
-    Estimates the initial value for the :math:`t_0` parameter. This is 
-    necessary because the posterior is highly multi-modal in :math:`t_0` 
-    and the sampler usually fails to converge if :math:`t_0` is not close 
+    Estimates the initial value for the :math:`t_0` parameter. This is
+    necessary because the posterior is highly multi-modal in :math:`t_0`
+    and the sampler usually fails to converge if :math:`t_0` is not close
     to true value.
 
     Parameters
@@ -49,7 +50,7 @@ def estimate_baseline_flux(data):
 
     Returns
     -------
-    ndarray 
+    ndarray
         Estimate of baseline flux in each band.
     """
     tables = data.get_standardized_data(rescale=False)
@@ -126,7 +127,7 @@ def compute_source_mag_and_blend_fraction(
     """
     model = pm.modelcontext(model)
 
-    if model.standardized_data is True:
+    if model.is_standardized is True:
         # Revert F_base and Delta_F to non-standardized units
         data.units = "fluxes"
         fluxes_median = np.zeros(len(data.light_curves))
@@ -170,7 +171,7 @@ def plot_model_and_residuals(
     n_samples=50,
     gp_list=None,
     model=None,
-    **kwargs
+    **kwargs,
 ):
     """
     Plots model in data space given samples from the posterior 
@@ -217,7 +218,7 @@ def plot_model_and_residuals(
         samples = xo.get_samples_from_trace(trace, size=n_samples)
 
     # Load data
-    if model.standardized_data is True:
+    if model.is_standardized is True:
         tables = data.get_standardized_data()
     else:
         tables = data.get_standardized_data(rescale=False)
@@ -296,12 +297,11 @@ def plot_map_model_and_residuals(
     ax, data, map_point, t_grid, prediction, gp_list=None, model=None, **kwargs
 ):
     """
-    Plots model in data space given samples from the posterior 
-    distribution. Also plots residuals with respect to the median model, where 
-    the median model is the median of multiple posterior draws of the model 
-    in data space, rather then a single draw corresponding to median values of
-    all parameters. All extra keyword arguments are passed to the matplotlib
-    plot function.
+    Plots model in data space given samples from the posterior distribution. 
+    Also plots residuals with respect to the median model, where the median 
+    model is the median of multiple posterior draws of the model in data space,
+    rather then a single draw corresponding to median values of all parameters.
+    All extra keyword arguments are passed to the matplotlib plot function.
     
     Parameters
     ----------
@@ -328,8 +328,9 @@ def plot_map_model_and_residuals(
     model = pm.modelcontext(model)
 
     # Load data
-    if model.standardized_data is True:
+    if model.is_standardized is True:
         tables = data.get_standardized_data()
+
     else:
         tables = data.get_standardized_data(rescale=False)
 
@@ -364,7 +365,7 @@ def plot_map_model_and_residuals(
         )
 
     # Plot data
-    data.plot_standardized_data(ax[0], rescale=model.standardized_data)
+    data.plot_standardized_data(ax[0], rescale=model.is_standardized)
     ax[0].set_xlabel(None)
     ax[1].set_xlabel("HJD - 2450000")
     ax[1].set_ylabel("Residuals")

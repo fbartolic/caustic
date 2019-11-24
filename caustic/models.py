@@ -28,15 +28,14 @@ class SingleLensModel(pm.Model):
         else:
             tables = data.get_standardized_data(rescale=False)
 
-        self.standardized_data = standardize
+        self.is_standardized = standardize
         self.n_bands = len(tables)  # number of photometric bands
 
         # Useful attributes
         self.t_min = np.min([table["HJD"][0] for table in tables])
         self.t_max = np.max([table["HJD"][-1] for table in tables])
-        self.max_npoints = int(np.max([len(table["HJD"]) for table in tables]))
 
-        # Construct tensors used for computing the models
+        # Store the data for each band as list of tensors
         self.t = [
             T.as_tensor_variable(np.array(table["HJD"])) for table in tables
         ]
