@@ -227,7 +227,7 @@ def plot_model_and_residuals(
     n_samples=50,
     gp_list=None,
     model=None,
-    **kwargs,
+    **kwargs
 ):
     """
     Plots model in data space given samples from the posterior 
