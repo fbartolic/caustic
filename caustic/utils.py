@@ -267,10 +267,11 @@ def plot_model_and_residuals(
         )[1]
 
     # Plot data
-    data.plot_standardized_data(ax[0], rescale=model.standardized_data)
+    data.plot_standardized_data(ax[0], rescale=model.is_standardized)
     ax[0].set_xlabel(None)
     ax[1].set_xlabel("HJD - 2450000")
     ax[1].set_ylabel("Residuals")
+    ax[0].set_xlim(T.min(t_grid).eval(), T.max(t_grid).eval())
 
     # Compute residuals with respect to median model
     for n in range(n_bands):
@@ -369,6 +370,7 @@ def plot_map_model_and_residuals(
     ax[0].set_xlabel(None)
     ax[1].set_xlabel("HJD - 2450000")
     ax[1].set_ylabel("Residuals")
+    ax[0].set_xlim(T.min(t_grid).eval(), T.max(t_grid).eval())
 
     # Compute residuals with respect to median model
     for n in range(n_bands):
