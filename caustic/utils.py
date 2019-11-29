@@ -163,15 +163,7 @@ def compute_source_mag_and_blend_fraction(
 
 
 def plot_model_and_residuals(
-    ax,
-    data,
-    trace,
-    t_grid,
-    prediction,
-    n_samples=50,
-    gp_list=None,
-    model=None,
-    **kwargs,
+    ax, data, samples, t_grid, prediction, gp_list=None, model=None, **kwargs
 ):
     """
     Plots model in data space given samples from the posterior 
@@ -187,18 +179,14 @@ def plot_model_and_residuals(
         Needs to be of shape ``(2, 1)``.
     data : :func:`~caustic.data.Data`
         Microlensing event data. 
-    trace : PyMC3 MultiTrace object or ndarray
-        Trace object containing samples from posterior. Assumed to be either
-        a PyMC3 MultiTrace object, or a numpy array of shape 
-        ``(n_samples, n_vars)`` containing raw samples in the transformed 
-        parameter space (without deterministic variables).
+    samples : list 
+        List of dictionaries representing a point in
+        the parameter space which can then be evaluted in a model context.
     t_grid : theano.tensor
         Times at which we want to evaluate model predictions. Shape 
         ``(n_bands, n_pts)``.
     prediction : theano.tensor
         Model prediction evaluated at ``t_grid``.
-    n_samples: int
-        Number of posterior draws to be plotted.
     gp_list : list
         List of ``exoplanet.gp.GP`` objects, one per each band. If these
         are provided the likelihood which is computed is the GP marginal
@@ -209,13 +197,7 @@ def plot_model_and_residuals(
     """
     model = pm.modelcontext(model)
 
-    # Check if trace is a PyMC3 object or a raw numpy array, extract samples
-    if isinstance(trace, np.ndarray):
-        trace = trace[np.random.randint(len(trace), size=n_samples)]
-        #  Map parameters to a dictionary which can be evaluated in model context
-        samples = [model.bijection.rmap(params[::-1]) for params in trace]
-    else:
-        samples = xo.get_samples_from_trace(trace, size=n_samples)
+    n_samples = len(samples)
 
     # Load data
     if model.is_standardized is True:
@@ -394,7 +376,7 @@ def plot_map_model_and_residuals(
 
 
 def plot_trajectory_from_samples(
-    ax, trace, t_grid, u_n, u_e, n_samples=50, color="C0", model=None, **kwargs
+    ax, samples, t_grid, u_n, u_e, color="C0", model=None, **kwargs
 ):
     """
     Plots the trajectory of the lens with respect to the source on the plane of
@@ -405,11 +387,9 @@ def plot_trajectory_from_samples(
     ----------
     ax : matplotlib.axes 
         Needs to be of shape ``(2, 1)``.
-    trace : PyMC3 MultiTrace object or ndarray
-        Trace object containing samples from posterior. Assumed to be either
-        a PyMC3 MultiTrace object, or a numpy array of shape 
-        ``(n_samples, n_vars)`` containing raw samples in the transformed
-        parameter space (without deterministic variables).
+    samples : list 
+        List of dictionaries representing a point in the parameter space which
+        can then be evaluted in a model context.
     t_grid : theano.tensor
         Times at which we want to evaluate model predictions. Shape 
         ``(n_bands, n_pts)``.
@@ -419,22 +399,14 @@ def plot_trajectory_from_samples(
         East component of the trajectory vector :math:`\boldsymbol{u}(t)`.
     color : string
         Color of the plotted samples.
-    n_samples: int
-        Number of posterior draws to be plotted.
     model : pymc3.Model
         PyMC3 model object which was used to obtain posterior samples in the
         trace.
     """
-    # Check if trace is a PyMC3 object or a raw numpy array, extract samples
-    if isinstance(trace, np.ndarray):
-        trace = trace[np.random.randint(len(trace), size=n_samples)]
-        #  Map parameters to a dictionary which can be evaluated in model context
-        samples = [model.bijection.rmap(params[::-1]) for params in trace]
-    else:
-        samples = xo.get_samples_from_trace(trace, size=n_samples)
-
     # Evaluate model for each sample on a fine grid
     n_pts_dense = T.shape(t_grid)[1].eval()
+
+    n_samples = len(samples)
 
     prediction_eval_u_n = np.zeros((n_samples, n_pts_dense))
     prediction_eval_u_e = np.zeros((n_samples, n_pts_dense))
