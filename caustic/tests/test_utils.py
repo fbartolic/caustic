@@ -4,7 +4,6 @@ import theano.tensor as T
 from exoplanet import eval_in_model
 
 from caustic import (
-    construct_masked_tensor,
     get_log_likelihood_function,
     get_log_probability_function,
 )
