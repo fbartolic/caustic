@@ -281,7 +281,7 @@ class Data:
                 color="C" + str(i),
                 label=table.meta["observatory"] + " " + table.meta["filter"],
                 ecolor="C" + str(i),
-                alpha=0.5,
+                alpha=0.2,
             )
             ax.set_ylabel(unit)
 
@@ -298,7 +298,7 @@ class Data:
                     + table.meta["filter"]
                     + " masked",
                     ecolor="C" + str(i),
-                    alpha=0.1,
+                    alpha=0.05,
                 )
 
         if self.__units == "magnitudes":
@@ -340,7 +340,7 @@ class Data:
                 color="C" + str(i),
                 label=table.meta["observatory"] + " " + table.meta["filter"],
                 ecolor="C" + str(i),
-                alpha=0.5,
+                alpha=0.2,
             )
 
         ax.grid(True)
