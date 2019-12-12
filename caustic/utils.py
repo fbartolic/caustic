@@ -270,7 +270,7 @@ def plot_model_and_residuals(
             tables[n]["flux_err"],
             fmt="o",
             color="C" + str(n),
-            alpha=0.5,
+            alpha=0.2,
             **kwargs,
         )
         ax[1].grid(True)
@@ -369,7 +369,7 @@ def plot_map_model_and_residuals(
             tables[n]["flux_err"],
             fmt="o",
             color="C" + str(n),
-            alpha=0.5,
+            alpha=0.2,
             **kwargs,
         )
         ax[1].grid(True)
