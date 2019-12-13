@@ -4,7 +4,7 @@
 <a href="https://caustic.readthedocs.io/en/latest/">
 <img src="https://img.shields.io/badge/read-the%20docs-blue"/></a>
 <br>
-<img alt="Travis (.org)" src="https://img.shields.io/travis/fbartolic/caustic?label=tests">
+<img alt="Travis (.org) branch" src="https://img.shields.io/travis/fbartolic/caustic/master?label=tests">
 <br>
 <a href="https://docs.pymc.io/">
 <img src="https://img.shields.io/badge/powered_by-PyMC3-EB5368.svg?style=flat"></a>
