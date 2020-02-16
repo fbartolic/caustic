@@ -5,6 +5,7 @@ import theano
 import theano.tensor as T
 from matplotlib import pyplot as plt
 from pymc3.util import get_untransformed_name, is_transformed_name
+import warnings
 
 
 def estimate_t0(data):
@@ -589,6 +590,15 @@ def get_log_probability_function(model=None):
         Total log probability of the model.
     """
     model = pm.modelcontext(model)
+
+    if (
+        "_interval__" or "_log__" or "_lowerbound__" or "_upperbound__"
+    ) in str(model.vars):
+        warnings.warn(
+            """Your model contains transformed variables. Keep in mind,
+            that the compiled log probability function expects the,
+            transformed variables as an input.""",
+        )
 
     f = theano.function(model.vars, [model.logpt])
 
