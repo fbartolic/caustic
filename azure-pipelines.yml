@@ -27,5 +27,5 @@ jobs:
   - script: |
       . $CONDA/etc/profile.d/conda.sh
       conda activate caustic
-      pytest -v -s caustic
+      python -m pytest -v -s caustic
     displayName: 'Run tests'
