@@ -1,6 +1,6 @@
 import numpy as np
 import pymc3 as pm
-import theano.tensor as T
+import theano.tensor as tt
 from exoplanet import eval_in_model
 
 from caustic import (
@@ -18,7 +18,7 @@ def test_get_log_likelihood_function():
         x2 = pm.Normal("x2", 0, sigma=20, testval=2.37)
         x3 = pm.Exponential("x3", 0.2, testval=3.48)
 
-        pm.Potential("log_likelihood", T.sum(x1) * x2 + x3)
+        pm.Potential("log_likelihood", tt.sum(x1) * x2 + x3)
 
     with model:
         loglike = get_log_likelihood_function(model.log_likelihood)
@@ -39,7 +39,7 @@ def test_get_log_probability_function():
         x2 = pm.Normal("x2", 1.5, 20, testval=2.37)
         x3 = pm.Normal("x3", 0.2, 5.4, testval=3.48)
 
-        pm.Potential("log_likelihood", T.sum(x1) * x2 + x3)
+        pm.Potential("log_likelihood", tt.sum(x1) * x2 + x3)
 
     with model:
         logp = get_log_probability_function()

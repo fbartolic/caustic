@@ -1,6 +1,6 @@
 import numpy as np
 import pymc3 as pm
-import theano.tensor as T
+import theano.tensor as tt
 
 
 class SingleLensModel(pm.Model):
@@ -37,13 +37,13 @@ class SingleLensModel(pm.Model):
 
         # Store the data for each band as list of tensors
         self.t = [
-            T.as_tensor_variable(np.array(table["HJD"])) for table in tables
+            tt.as_tensor_variable(np.array(table["HJD"])) for table in tables
         ]
         self.F = [
-            T.as_tensor_variable(np.array(table["flux"])) for table in tables
+            tt.as_tensor_variable(np.array(table["flux"])) for table in tables
         ]
         self.sigF = [
-            T.as_tensor_variable(np.array(table["flux_err"]))
+            tt.as_tensor_variable(np.array(table["flux_err"]))
             for table in tables
         ]
 
@@ -65,8 +65,8 @@ class SingleLensModel(pm.Model):
         theano.tensor
             The value of the magnification at each time t.
         """
-        A_u = (u ** 2 + 2) / (u * T.sqrt(u ** 2 + 4))
-        A_u0 = (u0 ** 2 + 2) / (T.abs_(u0) * T.sqrt(u0 ** 2 + 4))
+        A_u = (u ** 2 + 2) / (u * tt.sqrt(u ** 2 + 4))
+        A_u0 = (u0 ** 2 + 2) / (tt.abs_(u0) * tt.sqrt(u0 ** 2 + 4))
 
         return (A_u - 1) / (A_u0 - 1)
 
@@ -99,8 +99,8 @@ class SingleLensModel(pm.Model):
         # Iterate over all observed bands
         for i in range(self.n_bands):
             if gp_list is None:
-                ll += -0.5 * T.sum(r[i] ** 2 / var_F[i]) - 0.5 * T.sum(
-                    T.log(2 * np.pi * var_F[i])
+                ll += -0.5 * tt.sum(r[i] ** 2 / var_F[i]) - 0.5 * tt.sum(
+                    tt.log(2 * np.pi * var_F[i])
                 )
             else:
                 ll += gp_list[i].log_likelihood(r[i])
@@ -127,34 +127,34 @@ class SingleLensModel(pm.Model):
         """
 
         def log_likelihood_single_band(F, var_F, mag):
-            N = T.shape(F)[0]
+            N = tt.shape(F)[0]
 
             # Linear parameter matrix
-            A = T.stack([mag, T.ones_like(F)], axis=1)
+            A = tt.stack([mag, tt.ones_like(F)], axis=1)
 
             # Covariance matrix
             C_diag = var_F
-            C = T.nlinalg.diag(C_diag)
+            C = tt.nlinalg.diag(C_diag)
 
             # Calculate inverse of covariance matrix for marginalized likelihood
-            inv_C = T.nlinalg.diag(T.pow(C_diag, -1.0))
-            ln_detC = T.log(C_diag).sum()
+            inv_C = tt.nlinalg.diag(tt.pow(C_diag, -1.0))
+            ln_detC = tt.log(C_diag).sum()
 
-            inv_L = T.nlinalg.diag(T.pow(T.nlinalg.diag(L), -1.0))
-            ln_detL = T.log(T.nlinalg.diag(L)).sum()
+            inv_L = tt.nlinalg.diag(tt.pow(tt.nlinalg.diag(L), -1.0))
+            ln_detL = tt.log(tt.nlinalg.diag(L)).sum()
 
-            S = inv_L + T.dot(A.transpose(), T.dot(inv_C, A))
-            inv_S = T.nlinalg.matrix_inverse(S)
-            ln_detS = T.log(T.nlinalg.det(S))
+            S = inv_L + tt.dot(A.transpose(), tt.dot(inv_C, A))
+            inv_S = tt.nlinalg.matrix_inverse(S)
+            ln_detS = tt.log(tt.nlinalg.det(S))
 
-            inv_SIGMA = inv_C - T.dot(
-                inv_C, T.dot(A, T.dot(inv_S, T.dot(A.transpose(), inv_C)))
+            inv_SIGMA = inv_C - tt.dot(
+                inv_C, tt.dot(A, tt.dot(inv_S, tt.dot(A.transpose(), inv_C)))
             )
             ln_detSIGMA = ln_detC + ln_detL + ln_detS
 
             # Calculate marginalized likelihood
             ll = (
-                -0.5 * T.dot(F.transpose(), T.dot(inv_SIGMA, F))
+                -0.5 * tt.dot(F.transpose(), tt.dot(inv_SIGMA, F))
                 - 0.5 * N * np.log(2 * np.pi)
                 - 0.5 * ln_detSIGMA
             )

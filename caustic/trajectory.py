@@ -1,6 +1,6 @@
 import exoplanet as xo
 import numpy as np
-import theano.tensor as T
+import theano.tensor as tt
 from astropy.coordinates import get_body_barycentric_posvel
 from astropy.time import Time
 
@@ -241,22 +241,22 @@ class Trajectory:
         for idx in range(len(self.data.light_curves)):
             # the interpolation function requires tensor of shape (n_points, 1)
             # as an input
-            pts = T.reshape(t[idx], (T.shape(t[idx])[0], 1))
+            pts = tt.reshape(t[idx], (tt.shape(t[idx])[0], 1))
             zeta_e_list.append(self.zeta_e_interp.evaluate(pts).transpose())
             zeta_n_list.append(self.zeta_n_interp.evaluate(pts).transpose())
 
         #  Evalute zeta function and its derivative at t0
-        zeta_e_t0 = self.zeta_e_interp.evaluate(T.reshape(self.t0, (1, 1)))[
+        zeta_e_t0 = self.zeta_e_interp.evaluate(tt.reshape(self.t0, (1, 1)))[
             0, 0
         ]
-        zeta_n_t0 = self.zeta_n_interp.evaluate(T.reshape(self.t0, (1, 1)))[
+        zeta_n_t0 = self.zeta_n_interp.evaluate(tt.reshape(self.t0, (1, 1)))[
             0, 0
         ]
         zeta_e_dot_t0 = self.zeta_e_dot_interp.evaluate(
-            T.reshape(self.t0, (1, 1))
+            tt.reshape(self.t0, (1, 1))
         )[0, 0]
         zeta_n_dot_t0 = self.zeta_n_dot_interp.evaluate(
-            T.reshape(self.t0, (1, 1))
+            tt.reshape(self.t0, (1, 1))
         )[0, 0]
 
         # Compute the delta_zeta function
@@ -287,7 +287,7 @@ class Trajectory:
         for idx in range(len(self.data.light_curves)):
             # the interpolation function requires tensor of shape (n_points, 1)
             # as an input
-            pts = T.reshape(t[idx], (T.shape(t[idx])[0], 1))
+            pts = tt.reshape(t[idx], (tt.shape(t[idx])[0], 1))
             zeta_e_dot_list.append(
                 self.zeta_e_dot_interp.evaluate(pts).transpose()
             )
@@ -296,10 +296,10 @@ class Trajectory:
             )
 
         zeta_e_dot_t0 = self.zeta_e_dot_interp.evaluate(
-            T.reshape(self.t0, (1, 1))
+            tt.reshape(self.t0, (1, 1))
         )[0, 0]
         zeta_n_dot_t0 = self.zeta_n_dot_interp.evaluate(
-            T.reshape(self.t0, (1, 1))
+            tt.reshape(self.t0, (1, 1))
         )[0, 0]
 
         # Compute delta_zeta function
@@ -329,7 +329,7 @@ class Trajectory:
         for idx in range(len(self.data.light_curves)):
             # the interpolation function requires tensor of shape (n_points, 1)
             # as an input
-            pts = T.reshape(t[idx], (T.shape(t[idx])[0], 1))
+            pts = tt.reshape(t[idx], (tt.shape(t[idx])[0], 1))
             zeta_e_ddot_list.append(
                 self.zeta_e_ddot_interp.evaluate(pts).transpose()
             )
@@ -386,10 +386,10 @@ class Trajectory:
         if (self.piEE and self.piEN) is not None:
             u_per, u_par = self.__compute_u(t, self.piEE, self.piEN)
 
-            u = T.sqrt(u_per ** 2 + u_par ** 2)
+            u = tt.sqrt(u_per ** 2 + u_par ** 2)
 
             if return_components is True:
-                piE = T.sqrt(self.piEE ** 2 + self.piEN ** 2)
+                piE = tt.sqrt(self.piEE ** 2 + self.piEN ** 2)
 
                 cospsi = self.piEN / piE
                 sinpsi = self.piEE / piE
@@ -403,15 +403,15 @@ class Trajectory:
                 return u
 
         elif (self.piE and self.psi) is not None:
-            cospsi = T.cos(self.psi)
-            sinpsi = T.sin(self.psi)
+            cospsi = tt.cos(self.psi)
+            sinpsi = tt.sin(self.psi)
 
             piEE = self.piE * sinpsi
             piEN = self.piE * cospsi
 
             u_per, u_par = self.__compute_u(t, piEE, piEN)
 
-            u = T.sqrt(u_per ** 2 + u_par ** 2)
+            u = tt.sqrt(u_per ** 2 + u_par ** 2)
 
             if return_components is True:
                 u_e = cospsi * u_per + sinpsi * u_par
@@ -440,11 +440,11 @@ class Trajectory:
                 - self.a_per * delta_zeta_n_ddot_t0
             ) / (delta_zeta_e_ddot_t0 ** 2 + delta_zeta_n_ddot_t0 ** 2)
 
-            piE = T.sqrt(piEE ** 2 + piEN ** 2)
+            piE = tt.sqrt(piEE ** 2 + piEN ** 2)
 
             u_per, u_par = self.__compute_u(t, piEE, piEN)
 
-            u = T.sqrt(u_per ** 2 + u_par ** 2)
+            u = tt.sqrt(u_per ** 2 + u_par ** 2)
 
             if return_components is True:
                 cospsi = piEN / piE
@@ -458,5 +458,5 @@ class Trajectory:
             else:
                 return u
         else:
-            u = T.sqrt(self.u0 ** 2 + ((t - self.t0) / self.tE) ** 2)
+            u = tt.sqrt(self.u0 ** 2 + ((t - self.t0) / self.tE) ** 2)
             return u

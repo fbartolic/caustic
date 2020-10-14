@@ -1,5 +1,5 @@
 import numpy as np
-import theano.tensor as T
+import theano.tensor as tt
 
 from caustic import data, models, trajectory
 
@@ -16,7 +16,7 @@ def test_delta_zeta():
     with model:
         trajectory_ = trajectory.Trajectory(event, 50.0, 0.1, 20.0, 0.1, 0.3)
 
-        t0_test = T.as_tensor_variable(np.array([50.0])[np.newaxis, :])
+        t0_test = tt.as_tensor_variable(np.array([50.0])[np.newaxis, :])
 
         delta_zeta_n, delta_zeta_e = trajectory_._Trajectory__compute_delta_zeta(
             t0_test
@@ -38,7 +38,7 @@ def test_delta_zeta_dot():
     with model:
         trajectory_ = trajectory.Trajectory(event, 50.0, 0.1, 20.0, 0.1, 0.3)
 
-        t0_test = T.as_tensor_variable(np.array([50.0])[np.newaxis, :])
+        t0_test = tt.as_tensor_variable(np.array([50.0])[np.newaxis, :])
 
         delta_zeta_n_dot, delta_zeta_e_dot = trajectory_._Trajectory__compute_delta_zeta_dot(
             t0_test
@@ -65,16 +65,16 @@ def test_compute_trajectory():
         trajectory_ = trajectory.Trajectory(
             event, t0_, 0.4, 150.0, piEE=0.1, piEN=0.3
         )
-        t0_test = T.as_tensor_variable(np.array([t0_])[np.newaxis, :])
+        t0_test = tt.as_tensor_variable(np.array([t0_])[np.newaxis, :])
 
         un, ue = trajectory_._Trajectory__compute_u(t0_test, 0.1, 0.3)
         un_dot, ue_dot = trajectory_._Trajectory__compute_u_dot(
             t0_test, 0.1, 0.3
         )
 
-        u = T.stack([ue[0][0][0], un[0][0][0]]).T
-        u_dot = T.stack([ue_dot[0][0][0], un_dot[0][0][0]])
-        dot = T.dot(u, u_dot)
+        u = tt.stack([ue[0][0][0], un[0][0][0]]).T
+        u_dot = tt.stack([ue_dot[0][0][0], un_dot[0][0][0]])
+        dot = tt.dot(u, u_dot)
 
         assert np.allclose(dot.eval(), 0.0)
 
@@ -87,27 +87,27 @@ def test_compute_trajectory():
 
         trajectory_1 = trajectory.Trajectory(
             event,
-            T.as_tensor_variable(t0_),
-            T.as_tensor_variable(0.4),
-            T.as_tensor_variable(150.0),
+            tt.as_tensor_variable(t0_),
+            tt.as_tensor_variable(0.4),
+            tt.as_tensor_variable(150.0),
         )
 
         trajectory_2 = trajectory.Trajectory(
             event,
-            T.as_tensor_variable(t0_),
-            T.as_tensor_variable(0.4),
-            T.as_tensor_variable(150.0),
-            piEE=T.as_tensor_variable(0.0),
-            piEN=T.as_tensor_variable(0.0),
+            tt.as_tensor_variable(t0_),
+            tt.as_tensor_variable(0.4),
+            tt.as_tensor_variable(150.0),
+            piEE=tt.as_tensor_variable(0.0),
+            piEN=tt.as_tensor_variable(0.0),
         )
 
         trajectory_3 = trajectory.Trajectory(
             event,
-            T.as_tensor_variable(t0_),
-            T.as_tensor_variable(0.4),
-            T.as_tensor_variable(150.0),
-            a_per=T.as_tensor_variable(0.0),
-            a_par=T.as_tensor_variable(0.0),
+            tt.as_tensor_variable(t0_),
+            tt.as_tensor_variable(0.4),
+            tt.as_tensor_variable(150.0),
+            a_per=tt.as_tensor_variable(0.0),
+            a_par=tt.as_tensor_variable(0.0),
         )
 
         u1 = trajectory_1.compute_trajectory(model.t)
@@ -122,7 +122,7 @@ def test_compute_trajectory():
 
     with model:
         t0_ = 0.5 * (model.t[0][0].eval() + model.t[0][-1].eval())
-        t0_tens = T.as_tensor_variable(np.array([t0_])[np.newaxis, :])
+        t0_tens = tt.as_tensor_variable(np.array([t0_])[np.newaxis, :])
 
         # Specify parallax parameters
         piEE = 0.1
@@ -138,11 +138,11 @@ def test_compute_trajectory():
         # Same for acceleration parametrization
         trajectory_1 = trajectory.Trajectory(
             event,
-            T.as_tensor_variable(t0_),
-            T.as_tensor_variable(0.4),
-            T.as_tensor_variable(150.0),
-            piEE=T.as_tensor_variable(piEE),
-            piEN=T.as_tensor_variable(piEN),
+            tt.as_tensor_variable(t0_),
+            tt.as_tensor_variable(0.4),
+            tt.as_tensor_variable(150.0),
+            piEE=tt.as_tensor_variable(piEE),
+            piEN=tt.as_tensor_variable(piEN),
         )
 
         delta_zeta_n_ddot_t0, delta_zeta_e_ddot_t0 = trajectory_1._Trajectory__compute_delta_zeta_ddot(
@@ -160,20 +160,20 @@ def test_compute_trajectory():
 
         trajectory_2 = trajectory.Trajectory(
             event,
-            T.as_tensor_variable(t0_),
-            T.as_tensor_variable(0.4),
-            T.as_tensor_variable(150.0),
-            piE=T.as_tensor_variable(piE_),
-            psi=T.as_tensor_variable(psi),
+            tt.as_tensor_variable(t0_),
+            tt.as_tensor_variable(0.4),
+            tt.as_tensor_variable(150.0),
+            piE=tt.as_tensor_variable(piE_),
+            psi=tt.as_tensor_variable(psi),
         )
 
         trajectory_3 = trajectory.Trajectory(
             event,
-            T.as_tensor_variable(t0_),
-            T.as_tensor_variable(0.4),
-            T.as_tensor_variable(150.0),
-            a_per=T.as_tensor_variable(a_per),
-            a_par=T.as_tensor_variable(a_par),
+            tt.as_tensor_variable(t0_),
+            tt.as_tensor_variable(0.4),
+            tt.as_tensor_variable(150.0),
+            a_per=tt.as_tensor_variable(a_per),
+            a_par=tt.as_tensor_variable(a_par),
         )
 
         u1, u1n, u1e = trajectory_1.compute_trajectory(

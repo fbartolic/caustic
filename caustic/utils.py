@@ -2,9 +2,10 @@ import exoplanet as xo
 import numpy as np
 import pymc3 as pm
 import theano
-import theano.tensor as T
+import theano.tensor as tt
 from matplotlib import pyplot as plt
 from pymc3.util import get_untransformed_name, is_transformed_name
+import warnings
 
 
 def estimate_t0(data):
@@ -139,16 +140,16 @@ def compute_source_mag_and_blend_fraction(
             fluxes_std[i] = np.std(table["flux"][mask])
 
         # Flux parameters to standard flux units
-        Delta_F_ = T.as_tensor_variable(fluxes_std) * Delta_F
-        F_base_ = T.as_tensor_variable(
+        Delta_F_ = tt.as_tensor_variable(fluxes_std) * Delta_F
+        F_base_ = tt.as_tensor_variable(
             fluxes_std
-        ) * F_base + T.as_tensor_variable(fluxes_median)
+        ) * F_base + tt.as_tensor_variable(fluxes_median)
     else:
         Delta_F_ = Delta_F
         F_base_ = F_base
 
     # Calculate source flux and blend flux
-    A_u0 = (u_0 ** 2 + 2) / (T.abs_(u_0) * T.sqrt(u_0 ** 2 + 4))
+    A_u0 = (u_0 ** 2 + 2) / (tt.abs_(u_0) * tt.sqrt(u_0 ** 2 + 4))
 
     F_S = Delta_F_ / (A_u0 - 1)
     F_B = F_base_ - F_S
@@ -157,7 +158,7 @@ def compute_source_mag_and_blend_fraction(
 
     # Convert fluxes to magnitudes
     zero_point = 22.0
-    m_source = zero_point - 2.5 * T.log10(F_S)
+    m_source = zero_point - 2.5 * tt.log10(F_S)
 
     return m_source, g
 
@@ -206,7 +207,7 @@ def plot_model_and_residuals(
         tables = data.get_standardized_data(rescale=False)
 
     # Evaluate model for each sample on a fine grid
-    n_pts_dense = T.shape(t_grid)[1].eval()
+    n_pts_dense = tt.shape(t_grid)[1].eval()
     n_bands = len(data.light_curves)
 
     prediction_eval = np.zeros((n_samples, n_bands, n_pts_dense))
@@ -253,7 +254,7 @@ def plot_model_and_residuals(
     ax[0].set_xlabel(None)
     ax[1].set_xlabel("HJD - 2450000")
     ax[1].set_ylabel("Residuals")
-    ax[0].set_xlim(T.min(t_grid).eval(), T.max(t_grid).eval())
+    ax[0].set_xlim(tt.min(t_grid).eval(), tt.max(t_grid).eval())
 
     # Compute residuals with respect to median model
     for n in range(n_bands):
@@ -318,7 +319,7 @@ def plot_map_model_and_residuals(
         tables = data.get_standardized_data(rescale=False)
 
     # Evaluate model for each sample on a fine grid
-    n_pts_dense = T.shape(t_grid)[1].eval()
+    n_pts_dense = tt.shape(t_grid)[1].eval()
     n_bands = len(data.light_curves)
 
     prediction_eval = np.zeros((n_bands, n_pts_dense))
@@ -352,7 +353,7 @@ def plot_map_model_and_residuals(
     ax[0].set_xlabel(None)
     ax[1].set_xlabel("HJD - 2450000")
     ax[1].set_ylabel("Residuals")
-    ax[0].set_xlim(T.min(t_grid).eval(), T.max(t_grid).eval())
+    ax[0].set_xlim(tt.min(t_grid).eval(), tt.max(t_grid).eval())
 
     # Compute residuals with respect to median model
     for n in range(n_bands):
@@ -404,7 +405,7 @@ def plot_trajectory_from_samples(
         trace.
     """
     # Evaluate model for each sample on a fine grid
-    n_pts_dense = T.shape(t_grid)[1].eval()
+    n_pts_dense = tt.shape(t_grid)[1].eval()
 
     n_samples = len(samples)
 
@@ -490,8 +491,8 @@ def compute_invgamma_params(data):
         )
 
     return (
-        T.as_tensor_variable(invgamma_a.reshape((n_bands, 1))),
-        T.as_tensor_variable(invgamma_b.reshape((n_bands, 1))),
+        tt.as_tensor_variable(invgamma_a.reshape((n_bands, 1))),
+        tt.as_tensor_variable(invgamma_b.reshape((n_bands, 1))),
     )
 
 
@@ -554,7 +555,7 @@ def get_log_likelihood_function_grad(ll_tensor, model=None):
     model = pm.modelcontext(model)
 
     variables = __get_untransformed_vars(model)
-    grad = T.grad(ll_tensor, variables)
+    grad = tt.grad(ll_tensor, variables)
     f_grad = theano.function(variables, grad)
 
     def log_likelihood_grad(params):
@@ -590,6 +591,15 @@ def get_log_probability_function(model=None):
     """
     model = pm.modelcontext(model)
 
+    if (
+        "_interval__" or "_log__" or "_lowerbound__" or "_upperbound__"
+    ) in str(model.vars):
+        warnings.warn(
+            "Your model contains transformed variables. Keep in mind",
+            "that the compiled log probability function expects the",
+            "transformed variables as an input.",
+        )
+
     f = theano.function(model.vars, [model.logpt])
 
     def log_prob(params):
@@ -608,7 +618,7 @@ def get_log_probability_function_grad(ll_tensor, model=None):
     """
     model = pm.modelcontext(model)
 
-    grad = T.grad(ll_tensor, model.vars)
+    grad = tt.grad(ll_tensor, model.vars)
     f_grad = theano.function(model.vars, grad)
 
     def log_probability_grad(params):
