@@ -1,0 +1,31 @@
+jobs:
+- job: Default
+  timeoutInMinutes: 120
+  pool:
+    vmImage: Ubuntu-16.04
+  steps:
+  - script: |
+      nproc
+      lscpu
+    displayName: 'Machine info'
+  - script: |
+      sudo chown -R $USER $CONDA
+      . $CONDA/etc/profile.d/conda.sh
+      conda create --yes --quiet --name caustic python=3.7.3 pip
+    displayName: 'Setup conda'
+  - script: |
+      . $CONDA/etc/profile.d/conda.sh
+      conda activate caustic 
+      conda install -y -q numpy scipy mkl openblas=0.3.6 theano
+      theano-cache purge
+      pip install -U pip
+      pip install -U setuptools
+      pip install -U pytest
+      pip install -U tqdm
+      pip install -U -r requirements.txt
+    displayName: 'Install dependencies'
+  - script: |
+      . $CONDA/etc/profile.d/conda.sh
+      conda activate caustic
+      pytest -v -s caustic
+    displayName: 'Run tests'
