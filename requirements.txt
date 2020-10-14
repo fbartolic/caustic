@@ -1,6 +1,7 @@
 numpy>=1.13.0
-pymc3>=3.6
-theano>=1.0.4
-exoplanet>=0.2.0
+pymc3>=3.8
+theano>=1.0.5
+exoplanet>=0.4.0
 astropy>=3.0
+celerite2
 matplotlib
