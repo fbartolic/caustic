@@ -21,4 +21,11 @@ multi_line_output = 3
 include_trailing_comma = true
 force_grid_wrap = 0
 use_parentheses = true
-known_third_party = ["astropy", "matplotlib", "numpy", "pymc3", "pytest", "scipy", "setuptools", "theano", "dynesty"] 
+known_third_party = ["astropy", "matplotlib", "numpy", "numpyro", "jax", "pytest", "scipy", "setuptools"] 
+
+[build-system]
+requires = ["setuptools>=42", "wheel", "setuptools_scm[toml]>=3.4"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+write_to = "src/caustics/caustic_version.py"
